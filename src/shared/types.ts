@@ -74,6 +74,8 @@ export const STORAGE_KEYS = {
   formFill: 'formFillFields',
   settings: 'settings',
   stories: 'stories',
+  profiles: 'formProfiles',
+  counters: 'counters',
 } as const;
 
 /** Entries live under their own key so a storage change touches one story, not all of them. */

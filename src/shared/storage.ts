@@ -8,6 +8,7 @@ import {
   type Settings,
 } from './types';
 import type { StoryEntry, StoryMeta } from './story';
+import { migrateFormFillFields, type FormProfile } from './form';
 
 const hasChromeStorage = (): boolean =>
   typeof chrome !== 'undefined' && !!chrome.storage?.local;
@@ -29,11 +30,6 @@ export async function loadFormFillFields(): Promise<FormFillField[]> {
   const stored = await chrome.storage.local.get([STORAGE_KEYS.formFill]);
   const fields = stored[STORAGE_KEYS.formFill];
   return Array.isArray(fields) ? (fields as FormFillField[]) : DEFAULT_FORM_FILL_FIELDS;
-}
-
-export async function saveFormFillFields(fields: FormFillField[]): Promise<void> {
-  if (!hasChromeStorage()) return;
-  await chrome.storage.local.set({ [STORAGE_KEYS.formFill]: fields });
 }
 
 export async function loadSettings(): Promise<Settings> {
@@ -86,4 +82,38 @@ export async function saveStoryEntries(storyId: string, entries: StoryEntry[]): 
 export async function removeStory(storyId: string): Promise<void> {
   if (!hasChromeStorage()) return;
   await chrome.storage.local.remove(storyEntriesKey(storyId));
+}
+
+/**
+ * Profiles, migrating the day-one `formFillFields` list on first read so no
+ * existing setup is lost.
+ */
+export async function loadProfiles(): Promise<FormProfile[]> {
+  if (!hasChromeStorage()) return [];
+  const stored = await chrome.storage.local.get([STORAGE_KEYS.profiles, STORAGE_KEYS.formFill]);
+  const profiles = stored[STORAGE_KEYS.profiles];
+  if (Array.isArray(profiles) && profiles.length > 0) return profiles as FormProfile[];
+
+  const legacy = stored[STORAGE_KEYS.formFill];
+  if (!Array.isArray(legacy) || legacy.length === 0) return [];
+  const migrated = [migrateFormFillFields(legacy as FormFillField[])];
+  await saveProfiles(migrated);
+  return migrated;
+}
+
+export async function saveProfiles(profiles: FormProfile[]): Promise<void> {
+  if (!hasChromeStorage()) return;
+  await chrome.storage.local.set({ [STORAGE_KEYS.profiles]: profiles });
+}
+
+export async function loadCounters(): Promise<Record<string, number>> {
+  if (!hasChromeStorage()) return {};
+  const stored = await chrome.storage.local.get([STORAGE_KEYS.counters]);
+  const counters = stored[STORAGE_KEYS.counters];
+  return counters && typeof counters === 'object' ? (counters as Record<string, number>) : {};
+}
+
+export async function saveCounters(counters: Record<string, number>): Promise<void> {
+  if (!hasChromeStorage()) return;
+  await chrome.storage.local.set({ [STORAGE_KEYS.counters]: counters });
 }

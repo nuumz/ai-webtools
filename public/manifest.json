@@ -7,7 +7,6 @@
   "permissions": [
     "sidePanel",
     "storage",
-    "activeTab",
     "scripting",
     "unlimitedStorage"
   ],
@@ -43,5 +42,8 @@
       "all_frames": true,
       "world": "ISOLATED"
     }
+  ],
+  "host_permissions": [
+    "<all_urls>"
   ]
 }

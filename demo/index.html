@@ -1,0 +1,86 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Form filler demo</title>
+<style>
+  body { font: 14px system-ui; margin: 16px; max-width: 640px; }
+  label { display: block; margin-top: 10px; font-size: 12px; color: #475569; }
+  input, select, .editable { width: 100%; padding: 6px; box-sizing: border-box; }
+  .editable { border: 1px solid #cbd5e1; min-height: 32px; }
+  iframe { width: 100%; height: 90px; border: 1px solid #cbd5e1; margin-top: 12px; }
+</style>
+
+<h1>Checkout demo</h1>
+
+<form id="signup">
+  <label for="email">Email</label>
+  <input id="email" name="email" data-testid="email" placeholder="you@example.com">
+
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password">
+
+  <label for="confirmPassword">Confirm password</label>
+  <input id="confirmPassword" name="confirmPassword" type="password">
+
+  <label for="qty">Quantity</label>
+  <input id="qty" name="qty" type="number" value="1">
+
+  <label for="price">Price</label>
+  <input id="price" name="price" type="number" value="0">
+
+  <label for="total">Total</label>
+  <input id="total" name="total">
+
+  <label for="country">Country</label>
+  <select id="country" name="country">
+    <option value="">Choose…</option>
+    <option value="th">Thailand</option>
+    <option value="jp">Japan</option>
+  </select>
+
+  <label for="city">City</label>
+  <select id="city" name="city"><option value="">Choose a country first</option></select>
+
+  <label for="notes">Notes</label>
+  <div id="notes" class="editable" contenteditable="true"></div>
+
+  <label for="newsletter">Newsletter</label>
+  <input id="newsletter" name="newsletter" type="checkbox">
+</form>
+
+<fancy-input></fancy-input>
+<iframe src="/demo/frame.html" title="child form"></iframe>
+
+<script>
+  // Dependent dropdown: cities only exist a moment after the country changes.
+  const CITIES = { th: ['Bangkok', 'Chiang Mai'], jp: ['Tokyo', 'Osaka'] };
+  document.getElementById('country').addEventListener('change', (event) => {
+    const city = document.getElementById('city');
+    city.innerHTML = '<option value="">Loading…</option>';
+    setTimeout(() => {
+      const options = CITIES[event.target.value] ?? [];
+      city.innerHTML = options.map((name) => `<option value="${name.toLowerCase().replace(/\s/g, '-')}">${name}</option>`).join('');
+    }, 100);
+  });
+
+  // A component that keeps its input inside an open shadow root.
+  customElements.define(
+    'fancy-input',
+    class extends HTMLElement {
+      connectedCallback() {
+        const shadow = this.attachShadow({ mode: 'open' });
+        shadow.innerHTML =
+          '<label style="font:12px system-ui;color:#475569">Shadow field' +
+          '<input data-testid="shadowField" style="width:100%;padding:6px;box-sizing:border-box"></label>';
+      }
+    },
+  );
+
+  // Records what the page actually observed, the way a framework would.
+  window.__events = [];
+  document.addEventListener('input', (event) => {
+    window.__events.push({ id: event.target.id || event.target.getAttribute('data-testid'), type: 'input' });
+  });
+  document.addEventListener('change', (event) => {
+    window.__events.push({ id: event.target.id || event.target.getAttribute('data-testid'), type: 'change' });
+  });
+</script>

@@ -1,24 +1,29 @@
 import { useCallback, useEffect, useState } from 'react';
 import RuleForm, { type RuleDraft } from './components/RuleForm';
 import RuleList from './components/RuleList';
-import AutoFillCard from './components/AutoFillCard';
+import ProfilesCard from './components/ProfilesCard';
 import NetworkLogCard from './components/NetworkLogCard';
 import StoriesCard from './components/StoriesCard';
 import { useNetworkLog } from './hooks/useNetworkLog';
 import {
-  loadFormFillFields,
+  loadCounters,
+  loadProfiles,
   loadRules,
   loadSettings,
   loadStories,
   loadStoryEntries,
   removeStory,
-  saveFormFillFields,
+  saveCounters,
+  saveProfiles,
   saveRules,
   saveSettings,
   saveStories,
   saveStoryEntries,
   normalizeSettings,
 } from '../shared/storage';
+import { newProfile, type FormProfile } from '../shared/form';
+import { resolveProfile } from '../shared/resolveProfile';
+import { activeTabId, runFill } from './inject/run';
 import { collectGarbage, putBody } from '../shared/bodyStore';
 import {
   addEntry,
@@ -31,49 +36,15 @@ import { randomId } from '../shared/ids';
 import {
   DEFAULT_SETTINGS,
   STORAGE_KEYS,
-  type FormFillField,
   type MutationRule,
   type Settings,
 } from '../shared/types';
 
-/** Runs inside the inspected page: fills inputs and notifies the framework. */
-function fillFormFields(fields: FormFillField[]): number {
-  let filled = 0;
-  for (const { selector, value } of fields) {
-    if (!selector) continue;
-    const element = document.querySelector(selector);
-    if (!(element instanceof HTMLInputElement) &&
-        !(element instanceof HTMLTextAreaElement) &&
-        !(element instanceof HTMLSelectElement)) {
-      continue;
-    }
-
-    if (element instanceof HTMLInputElement && (element.type === 'checkbox' || element.type === 'radio')) {
-      element.checked = value === 'true' || value === '1';
-    } else {
-      // React/Vue track the value internally; go through the native setter so
-      // the change is not swallowed by the framework's value tracker.
-      const prototype =
-        element instanceof HTMLTextAreaElement
-          ? HTMLTextAreaElement.prototype
-          : element instanceof HTMLSelectElement
-            ? HTMLSelectElement.prototype
-            : HTMLInputElement.prototype;
-      const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
-      if (setter) setter.call(element, value);
-      else (element as HTMLInputElement).value = value;
-    }
-
-    element.dispatchEvent(new Event('input', { bubbles: true }));
-    element.dispatchEvent(new Event('change', { bubbles: true }));
-    filled += 1;
-  }
-  return filled;
-}
-
 export default function SidePanel() {
   const [rules, setRules] = useState<MutationRule[]>([]);
-  const [formFields, setFormFields] = useState<FormFillField[]>([]);
+  const [profiles, setProfiles] = useState<FormProfile[]>([]);
+  const [profileId, setProfileId] = useState<string | undefined>(undefined);
+  const [counters, setCounters] = useState<Record<string, number>>({});
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [stories, setStories] = useState<StoryMeta[]>([]);
   const [editing, setEditing] = useState<MutationRule | undefined>(undefined);
@@ -83,9 +54,13 @@ export default function SidePanel() {
 
   useEffect(() => {
     void loadRules().then(setRules);
-    void loadFormFillFields().then(setFormFields);
     void loadSettings().then(setSettings);
     void loadStories().then(setStories);
+    void loadCounters().then(setCounters);
+    void loadProfiles().then((loaded) => {
+      setProfiles(loaded);
+      setProfileId((current) => current ?? loaded[0]?.id);
+    });
   }, []);
 
   // Keep the panel in sync if storage is changed elsewhere (another window, import…).
@@ -97,11 +72,11 @@ export default function SidePanel() {
     ) => {
       if (area !== 'local') return;
       const ruleChange = changes[STORAGE_KEYS.rules];
-      const fieldChange = changes[STORAGE_KEYS.formFill];
+      const profileChange = changes[STORAGE_KEYS.profiles];
       const settingsChange = changes[STORAGE_KEYS.settings];
       const storyChange = changes[STORAGE_KEYS.stories];
       if (ruleChange) setRules((ruleChange.newValue as MutationRule[]) ?? []);
-      if (fieldChange) setFormFields((fieldChange.newValue as FormFillField[]) ?? []);
+      if (profileChange) setProfiles((profileChange.newValue as FormProfile[]) ?? []);
       if (settingsChange) setSettings(normalizeSettings(settingsChange.newValue));
       if (storyChange) setStories((storyChange.newValue as StoryMeta[]) ?? []);
     };
@@ -114,9 +89,9 @@ export default function SidePanel() {
     void saveRules(next);
   }, []);
 
-  const persistFields = useCallback((next: FormFillField[]) => {
-    setFormFields(next);
-    void saveFormFillFields(next);
+  const persistProfiles = useCallback((next: FormProfile[]) => {
+    setProfiles(next);
+    void saveProfiles(next);
   }, []);
 
   const persistSettings = useCallback((next: Settings) => {
@@ -214,20 +189,59 @@ export default function SidePanel() {
     await collectGarbage(referencedBodyKeys(entryLists));
   };
 
-  const injectFormFill = async () => {
+  const activeProfile = profiles.find((profile) => profile.id === profileId);
+  // Preview only: counters are drawn but not persisted until an actual fill.
+  const previewed = activeProfile
+    ? resolveProfile(activeProfile, { counters })
+    : { fields: [], values: {}, counters, errors: [] };
+
+  const fillForm = async () => {
+    if (!activeProfile) return;
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id) return;
-      const [result] = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: fillFormFields,
-        args: [formFields],
-      });
-      showToast(`Filled ${result?.result ?? 0} field(s)`);
+      const tabId = await activeTabId();
+      if (tabId === undefined) return;
+
+      const resolved = resolveProfile(activeProfile, { counters });
+      if (resolved.errors.length > 0) {
+        showToast(resolved.errors[0]);
+        return;
+      }
+      const outcome = await runFill(tabId, resolved.fields);
+      setCounters(resolved.counters);
+      void saveCounters(resolved.counters);
+
+      showToast(
+        outcome.misses.length > 0
+          ? `Filled ${outcome.filled.length} · missed ${outcome.misses.join(', ')}`
+          : `Filled ${outcome.filled.length} field(s)`,
+      );
     } catch (err) {
-      console.error('[Panel] Auto-fill failed:', err);
-      showToast('Auto-fill failed — see console');
+      console.error('[Panel] Fill failed:', err);
+      showToast('Fill failed — see console');
     }
+  };
+
+  const updateProfile = (next: FormProfile) =>
+    persistProfiles(profiles.map((profile) => (profile.id === next.id ? next : profile)));
+
+  const createProfile = () => {
+    const created = newProfile(`Profile ${profiles.length + 1}`);
+    persistProfiles([...profiles, created]);
+    setProfileId(created.id);
+  };
+
+  const duplicateProfile = () => {
+    if (!activeProfile) return;
+    const copy = { ...newProfile(`${activeProfile.name} copy`), fields: activeProfile.fields, vars: activeProfile.vars };
+    persistProfiles([...profiles, copy]);
+    setProfileId(copy.id);
+  };
+
+  const deleteProfile = () => {
+    if (!activeProfile) return;
+    const remaining = profiles.filter((profile) => profile.id !== activeProfile.id);
+    persistProfiles(remaining);
+    setProfileId(remaining[0]?.id);
   };
 
   const activeCount = rules.filter((rule) => rule.isActive).length;
@@ -243,10 +257,11 @@ export default function SidePanel() {
             </p>
           </div>
           <button
-            onClick={injectFormFill}
-            className="bg-blue-600 hover:bg-blue-500 text-xs px-3 py-1.5 rounded-md transition-colors"
+            onClick={fillForm}
+            disabled={!activeProfile}
+            className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-xs px-3 py-1.5 rounded-md transition-colors"
           >
-            Auto-Fill Form
+            Fill form
           </button>
         </div>
         <div className="px-4 pb-3 flex items-center gap-3 text-xs">
@@ -289,7 +304,18 @@ export default function SidePanel() {
           onSubmit={handleSubmit}
           onCancel={() => setEditing(undefined)}
         />
-        <AutoFillCard fields={formFields} onChange={persistFields} />
+        <ProfilesCard
+          profiles={profiles}
+          activeId={profileId}
+          preview={previewed.values}
+          errors={previewed.errors}
+          onSelect={setProfileId}
+          onChange={updateProfile}
+          onCreate={createProfile}
+          onDuplicate={duplicateProfile}
+          onDelete={deleteProfile}
+          onFill={() => void fillForm()}
+        />
 
         <h2 className="font-semibold text-gray-700 mb-3">
           Rules <span className="text-gray-400 font-normal">({activeCount} active)</span>
