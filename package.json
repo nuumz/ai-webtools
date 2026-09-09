@@ -11,7 +11,8 @@
     "build:scripts": "node scripts/build-scripts.mjs",
     "watch:scripts": "node scripts/build-scripts.mjs --watch",
     "typecheck": "tsc --noEmit",
-    "test:e2e": "node tests/interceptor.e2e.mjs",
+    "test:e2e": "node tests/e2e/run.mjs",
+    "test:ext": "node tests/e2e/run-extension.mjs",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

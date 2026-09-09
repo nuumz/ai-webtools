@@ -2,13 +2,24 @@ import { useCallback, useEffect, useState } from 'react';
 import RuleForm, { type RuleDraft } from './components/RuleForm';
 import RuleList from './components/RuleList';
 import AutoFillCard from './components/AutoFillCard';
+import NetworkLogCard from './components/NetworkLogCard';
+import { useNetworkLog } from './hooks/useNetworkLog';
 import {
   loadFormFillFields,
   loadRules,
+  loadSettings,
   saveFormFillFields,
   saveRules,
+  saveSettings,
+  normalizeSettings,
 } from '../shared/storage';
-import type { FormFillField, MutationRule } from '../shared/types';
+import {
+  DEFAULT_SETTINGS,
+  STORAGE_KEYS,
+  type FormFillField,
+  type MutationRule,
+  type Settings,
+} from '../shared/types';
 
 /** Runs inside the inspected page: fills inputs and notifies the framework. */
 function fillFormFields(fields: FormFillField[]): number {
@@ -48,12 +59,16 @@ function fillFormFields(fields: FormFillField[]): number {
 export default function SidePanel() {
   const [rules, setRules] = useState<MutationRule[]>([]);
   const [formFields, setFormFields] = useState<FormFillField[]>([]);
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [editing, setEditing] = useState<MutationRule | undefined>(undefined);
+  const [draft, setDraft] = useState<RuleDraft | undefined>(undefined);
   const [toast, setToast] = useState<string | null>(null);
+  const log = useNetworkLog();
 
   useEffect(() => {
     void loadRules().then(setRules);
     void loadFormFillFields().then(setFormFields);
+    void loadSettings().then(setSettings);
   }, []);
 
   // Keep the panel in sync if storage is changed elsewhere (another window, import…).
@@ -64,8 +79,12 @@ export default function SidePanel() {
       area: string,
     ) => {
       if (area !== 'local') return;
-      if (changes.mutationRules) setRules((changes.mutationRules.newValue as MutationRule[]) ?? []);
-      if (changes.formFillFields) setFormFields((changes.formFillFields.newValue as FormFillField[]) ?? []);
+      const ruleChange = changes[STORAGE_KEYS.rules];
+      const fieldChange = changes[STORAGE_KEYS.formFill];
+      const settingsChange = changes[STORAGE_KEYS.settings];
+      if (ruleChange) setRules((ruleChange.newValue as MutationRule[]) ?? []);
+      if (fieldChange) setFormFields((fieldChange.newValue as FormFillField[]) ?? []);
+      if (settingsChange) setSettings(normalizeSettings(settingsChange.newValue));
     };
     chrome.storage.onChanged.addListener(listener);
     return () => chrome.storage.onChanged.removeListener(listener);
@@ -81,13 +100,19 @@ export default function SidePanel() {
     void saveFormFillFields(next);
   }, []);
 
-  const handleSubmit = (draft: RuleDraft) => {
+  const persistSettings = useCallback((next: Settings) => {
+    setSettings(next);
+    void saveSettings(next);
+  }, []);
+
+  const handleSubmit = (submitted: RuleDraft) => {
     if (editing) {
-      persistRules(rules.map((rule) => (rule.id === editing.id ? { ...rule, ...draft } : rule)));
+      persistRules(rules.map((rule) => (rule.id === editing.id ? { ...rule, ...submitted } : rule)));
       setEditing(undefined);
       return;
     }
-    persistRules([...rules, { id: crypto.randomUUID(), isActive: true, ...draft }]);
+    persistRules([...rules, { id: newRuleId(), isActive: true, ...submitted }]);
+    setDraft(undefined);
   };
 
   const toggleRule = (id: string) =>
@@ -101,6 +126,13 @@ export default function SidePanel() {
   const showToast = (message: string) => {
     setToast(message);
     setTimeout(() => setToast(null), 2500);
+  };
+
+  const handleCreateRule = (fromExchange: RuleDraft) => {
+    setEditing(undefined);
+    // A fresh object identity is what re-hydrates the form.
+    setDraft({ ...fromExchange });
+    showToast('Draft loaded below — review, then save');
   };
 
   const injectFormFill = async () => {
@@ -119,24 +151,59 @@ export default function SidePanel() {
     }
   };
 
+  const activeCount = rules.filter((rule) => rule.isActive).length;
+
   return (
     <div className="flex flex-col h-screen bg-gray-50 text-sm font-sans">
-      <header className="bg-slate-900 text-white p-4 shadow-md flex justify-between items-center">
-        <h1 className="font-bold text-lg">Dev Interceptor</h1>
-        <button
-          onClick={injectFormFill}
-          className="bg-blue-600 hover:bg-blue-500 text-xs px-3 py-1.5 rounded-md transition-colors"
-        >
-          Auto-Fill Form
-        </button>
+      <header className="bg-slate-900 text-white shadow-md">
+        <div className="p-4 flex justify-between items-center">
+          <div>
+            <h1 className="font-bold text-lg leading-tight">Dev Interceptor</h1>
+            <p className="text-[11px] text-slate-400 truncate max-w-[15rem]" title={log.tabUrl}>
+              {log.tabUrl ?? (log.connected ? 'waiting for the page…' : 'not connected')}
+            </p>
+          </div>
+          <button
+            onClick={injectFormFill}
+            className="bg-blue-600 hover:bg-blue-500 text-xs px-3 py-1.5 rounded-md transition-colors"
+          >
+            Auto-Fill Form
+          </button>
+        </div>
+        <div className="px-4 pb-3 flex items-center gap-3 text-xs">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={settings.enabled}
+              onChange={(e) => persistSettings({ ...settings, enabled: e.target.checked })}
+            />
+            <span className={settings.enabled ? 'text-emerald-400' : 'text-slate-400'}>
+              {settings.enabled ? `Interception on (${activeCount})` : 'Interception off'}
+            </span>
+          </label>
+        </div>
       </header>
 
       <main className="p-4 flex-1 overflow-y-auto">
-        <RuleForm editing={editing} onSubmit={handleSubmit} onCancel={() => setEditing(undefined)} />
+        <NetworkLogCard
+          log={log}
+          capturing={settings.captureEnabled}
+          onToggleCapture={() =>
+            persistSettings({ ...settings, captureEnabled: !settings.captureEnabled })
+          }
+          onCreateRule={handleCreateRule}
+        />
+
+        <RuleForm
+          editing={editing}
+          initialDraft={draft}
+          onSubmit={handleSubmit}
+          onCancel={() => setEditing(undefined)}
+        />
         <AutoFillCard fields={formFields} onChange={persistFields} />
 
         <h2 className="font-semibold text-gray-700 mb-3">
-          Rules <span className="text-gray-400 font-normal">({rules.filter((r) => r.isActive).length} active)</span>
+          Rules <span className="text-gray-400 font-normal">({activeCount} active)</span>
         </h2>
         <RuleList rules={rules} onToggle={toggleRule} onDelete={deleteRule} onEdit={setEditing} />
       </main>
@@ -148,4 +215,11 @@ export default function SidePanel() {
       )}
     </div>
   );
+}
+
+/** `crypto.randomUUID` is unavailable outside secure contexts. */
+function newRuleId(): string {
+  const uuid = globalThis.crypto?.randomUUID;
+  if (typeof uuid === 'function') return uuid.call(globalThis.crypto);
+  return `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }

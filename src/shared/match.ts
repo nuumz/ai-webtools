@@ -69,7 +69,16 @@ function globToRegExp(pattern: string): RegExp {
 export function compileRules(rules: MutationRule[]): CompiledRule[] {
   return rules
     .filter((rule) => rule.isActive)
-    .map((rule) => ({ ...rule, matches: compilePattern(rule.urlPattern) }));
+    .map((rule) => ({ ...rule, matches: compilePattern(rule.urlPattern) }))
+    // Stable sort: rules without an explicit priority keep their insertion order.
+    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+}
+
+/** True when the rule has no origin scope, or one of its patterns matches the origin. */
+export function ruleAppliesToOrigin(rule: MutationRule, origin: string): boolean {
+  const origins = rule.scope?.origins;
+  if (!origins || origins.length === 0) return true;
+  return origins.some((pattern) => compilePattern(pattern)(origin));
 }
 
 export function findRule(

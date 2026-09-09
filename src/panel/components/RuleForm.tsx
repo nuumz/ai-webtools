@@ -13,11 +13,13 @@ const METHODS: HttpMethod[] = ['ANY', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 
 interface Props {
   editing?: MutationRule;
+  /** Prefilled from a captured exchange; a new object identity re-hydrates the form. */
+  initialDraft?: RuleDraft;
   onSubmit: (draft: RuleDraft) => void;
   onCancel?: () => void;
 }
 
-export default function RuleForm({ editing, onSubmit, onCancel }: Props) {
+export default function RuleForm({ editing, initialDraft, onSubmit, onCancel }: Props) {
   const [type, setType] = useState<RuleType>('MUTATE_RESPONSE');
   const [method, setMethod] = useState<HttpMethod>('ANY');
   const [urlPattern, setUrlPattern] = useState('/api/users/*');
@@ -27,13 +29,22 @@ export default function RuleForm({ editing, onSubmit, onCancel }: Props) {
 
   useEffect(() => {
     if (!editing) return;
-    setType(editing.type);
-    setMethod(editing.method);
-    setUrlPattern(editing.urlPattern);
-    setStatus(String(editing.status ?? 200));
-    setPayloadJson(JSON.stringify(editing.payload ?? {}, null, 2));
-    setError(null);
+    hydrate(editing);
   }, [editing]);
+
+  useEffect(() => {
+    if (!initialDraft) return;
+    hydrate(initialDraft);
+  }, [initialDraft]);
+
+  function hydrate(source: RuleDraft) {
+    setType(source.type);
+    setMethod(source.method);
+    setUrlPattern(source.urlPattern);
+    setStatus(String(source.status ?? 200));
+    setPayloadJson(JSON.stringify(source.payload ?? {}, null, 2));
+    setError(null);
+  }
 
   const handleSubmit = () => {
     if (!urlPattern.trim()) {

@@ -1,8 +1,10 @@
 import {
   DEFAULT_FORM_FILL_FIELDS,
+  DEFAULT_SETTINGS,
   STORAGE_KEYS,
   type FormFillField,
   type MutationRule,
+  type Settings,
 } from './types';
 
 const hasChromeStorage = (): boolean =>
@@ -30,4 +32,26 @@ export async function loadFormFillFields(): Promise<FormFillField[]> {
 export async function saveFormFillFields(fields: FormFillField[]): Promise<void> {
   if (!hasChromeStorage()) return;
   await chrome.storage.local.set({ [STORAGE_KEYS.formFill]: fields });
+}
+
+export async function loadSettings(): Promise<Settings> {
+  if (!hasChromeStorage()) return DEFAULT_SETTINGS;
+  const stored = await chrome.storage.local.get([STORAGE_KEYS.settings]);
+  return normalizeSettings(stored[STORAGE_KEYS.settings]);
+}
+
+export async function saveSettings(settings: Settings): Promise<void> {
+  if (!hasChromeStorage()) return;
+  await chrome.storage.local.set({ [STORAGE_KEYS.settings]: settings });
+}
+
+/** Fills in defaults for partial/legacy stored settings so every reader sees a complete shape. */
+export function normalizeSettings(raw: unknown): Settings {
+  if (!raw || typeof raw !== 'object') return DEFAULT_SETTINGS;
+  const partial = raw as Partial<Settings>;
+  return {
+    enabled: partial.enabled ?? DEFAULT_SETTINGS.enabled,
+    captureEnabled: partial.captureEnabled ?? DEFAULT_SETTINGS.captureEnabled,
+    redactKeys: Array.isArray(partial.redactKeys) ? partial.redactKeys : DEFAULT_SETTINGS.redactKeys,
+  };
 }
