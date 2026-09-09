@@ -89,8 +89,10 @@ query (`/api/search?type=A` vs `?type=B`) — the generated pattern then pins th
 **Redaction.** `Authorization`, `Cookie` and similar headers are always masked, along with
 any field whose name matches the configurable key list (`password`, `token`, `secret`,
 `citizenId`, `cardNo`, …). Masking happens in the page, before a record reaches the worker,
-so secrets never enter the log. Bodies are truncated at 64 KB and only text/JSON-ish
-content types are stored at all.
+so secrets never enter the log. Bodies are truncated at 1 MB and only text/JSON-ish
+content types are stored at all. A truncated body is broken JSON, so the panel refuses to
+build a stub from one and skips it when saving to a story — rather than handing the app a
+mock it cannot parse.
 
 ## Stories
 

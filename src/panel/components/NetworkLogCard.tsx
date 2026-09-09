@@ -118,11 +118,13 @@ export default function NetworkLogCard({
                       className="shrink-0 disabled:opacity-30"
                       checked={selected.includes(exchange.id)}
                       onChange={() => toggleSelected(exchange.id)}
-                      disabled={exchange.servedBy !== 'network'}
+                      disabled={exchange.servedBy !== 'network' || exchange.outcome === 'pending'}
                       title={
-                        exchange.servedBy === 'network'
-                          ? 'Select for a story'
-                          : 'Already served by a mock — only real responses can be recorded'
+                        exchange.outcome === 'pending'
+                          ? 'Still in flight'
+                          : exchange.servedBy === 'network'
+                            ? 'Select for a story'
+                            : 'Already served by a mock — only real responses can be recorded'
                       }
                     />
                   )}
@@ -137,7 +139,7 @@ export default function NetworkLogCard({
                       <span
                         className={`w-8 shrink-0 font-mono text-[10px] font-semibold tabular-nums ${statusColor(exchange)}`}
                       >
-                        {exchange.status || '—'}
+                        {exchange.outcome === 'pending' ? '…' : exchange.status || '—'}
                       </span>
                       <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink" title={exchange.url}>
                         {exchange.pathname}
@@ -146,7 +148,7 @@ export default function NetworkLogCard({
                       {exchange.servedBy !== 'network' && <ServedByChip servedBy={exchange.servedBy} />}
                     </span>
                     <span className="flex items-center gap-2 pl-[4.6rem] font-mono text-[10px] tabular-nums text-faint">
-                      <span>{exchange.durationMs} ms</span>
+                      <span>{exchange.outcome === 'pending' ? 'pending' : `${exchange.durationMs} ms`}</span>
                       {exchange.resBytes > 0 && <span>· {formatBytes(exchange.resBytes)}</span>}
                       {exchange.transport === 'xhr' && <span>· XHR</span>}
                     </span>
@@ -211,6 +213,7 @@ function ServedByChip({ servedBy }: { servedBy: ExchangeMeta['servedBy'] }) {
 }
 
 function statusColor(exchange: ExchangeMeta): string {
+  if (exchange.outcome === 'pending') return 'text-faint';
   if (exchange.outcome !== 'ok' || exchange.status === 0) return 'text-bad';
   if (exchange.status >= 500) return 'text-bad';
   if (exchange.status >= 400) return 'text-warn';

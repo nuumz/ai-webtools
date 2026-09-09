@@ -88,7 +88,7 @@ export function useNetworkLog(): NetworkLogState {
           break;
         case 'log/append':
           if (message.entries.length > 0) {
-            setEntries((current) => [...current, ...message.entries]);
+            setEntries((current) => mergeLogEntries(current, message.entries));
           }
           setDropped(message.dropped);
           break;
@@ -200,6 +200,16 @@ async function subscribePanel(port: chrome.runtime.Port): Promise<void> {
   } catch {
     send(port, { kind: 'log/subscribe' });
   }
+}
+
+function mergeLogEntries(current: ExchangeMeta[], incoming: ExchangeMeta[]): ExchangeMeta[] {
+  const next = [...current];
+  for (const entry of incoming) {
+    const index = next.findIndex((item) => item.id === entry.id);
+    if (index >= 0) next[index] = entry;
+    else next.push(entry);
+  }
+  return next;
 }
 
 function send(port: chrome.runtime.Port, message: PanelToBg): void {

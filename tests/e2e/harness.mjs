@@ -60,8 +60,12 @@ export async function startServer() {
       return json({ real: true });
     }
     if (url.pathname === '/api/big') {
-      // Comfortably past the 64KB capture cap.
-      return json({ blob: 'x'.repeat(100 * 1024) });
+      // Comfortably past the 1MB capture cap.
+      return json({ blob: 'x'.repeat(2 * 1024 * 1024) });
+    }
+    // Large but under the cap: must survive whole, or a stub built from it is broken JSON.
+    if (url.pathname === '/api/large') {
+      return json({ rows: Array.from({ length: 8000 }, (_, i) => ({ id: i, name: `row ${i}` })) });
     }
     if (url.pathname === '/api/error') {
       return json({ message: 'boom' }, 500);
@@ -130,7 +134,10 @@ export async function openPage(browser, config, { bodies = {} } = {}) {
 /** Reads the capture buffer after giving the 100ms batch timer room to flush. */
 export async function drainCaptures(page) {
   await page.waitForTimeout(250);
-  return page.evaluate(() => window.__captured ?? []);
+  const raw = await page.evaluate(() => window.__captured ?? []);
+  const byId = new Map();
+  for (const entry of raw) byId.set(entry.id, entry);
+  return [...byId.values()];
 }
 
 /** Loads the built form agent into every frame of a page, as executeScript would. */

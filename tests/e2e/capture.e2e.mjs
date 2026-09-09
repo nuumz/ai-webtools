@@ -1,6 +1,9 @@
 // Capture pipeline: what the MAIN world emits for the panel's network log.
 import { createChecker, drainCaptures, loadChromium, openPage, startServer } from './harness.mjs';
 
+/** Mirrors MAX_BODY_BYTES in src/shared/capture.ts. */
+const CAP = 1024 * 1024;
+
 const config = (overrides = {}) => ({
   version: 2,
   settings: { enabled: true, captureEnabled: true, redactKeys: ['password', 'token'], ...overrides },
@@ -23,6 +26,7 @@ export default async function run() {
     await fetch('/api/error');
     await fetch('/api/stub');
     await fetch('/api/big');
+    await fetch('/api/large');
     await fetch('/api/login', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer super-secret' },
@@ -39,7 +43,7 @@ export default async function run() {
   const captured = await drainCaptures(page);
   const byPath = (path) => captured.filter((x) => x.url.includes(path));
 
-  t.check('one record per request', captured.length, 6);
+  t.check('one record per request', captured.length, 7);
 
   const mutated = byPath('/api/users/1').find((x) => x.transport === 'fetch');
   t.check('mutated response is tagged', mutated?.servedBy, 'mutated');
@@ -59,9 +63,19 @@ export default async function run() {
   const big = byPath('/api/big')[0];
   t.check('oversized body is truncated', big?.responseBody?.truncated, true);
   t.assert(
-    'truncated body is capped at 64KB',
-    (big?.responseBody?.text.length ?? 0) <= 64 * 1024 + 1,
+    'truncated body is capped',
+    (big?.responseBody?.text.length ?? 0) <= CAP + 1,
     `length ${big?.responseBody?.text.length}`,
+  );
+
+  // A body under the cap must arrive whole: a mock is built by parsing this text,
+  // so one missing byte turns into a stub that serves the app nothing.
+  const large = byPath('/api/large')[0];
+  t.check('a large body under the cap is kept whole', large?.responseBody?.truncated, false);
+  t.check(
+    'a large body still parses',
+    JSON.parse(large?.responseBody?.text ?? '{}').rows?.length,
+    8000,
   );
 
   const login = byPath('/api/login')[0];

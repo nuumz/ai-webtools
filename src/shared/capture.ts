@@ -8,8 +8,13 @@
 
 import { randomId } from './ids';
 
-/** Bodies larger than this are stored truncated — a log is not an archive. */
-export const MAX_BODY_BYTES = 64 * 1024;
+/**
+ * Bodies larger than this are stored truncated. The cap has to clear a real API
+ * page of results, because a truncated body is not just a shorter log line: it
+ * is broken JSON, and stubbing or replaying it serves the app something it
+ * cannot parse.
+ */
+export const MAX_BODY_BYTES = 1024 * 1024;
 /** Above this, MUTATE_RESPONSE passes through: buffering + reparsing costs more than the mock is worth. */
 export const MAX_MUTATE_BYTES = 5 * 1024 * 1024;
 
@@ -47,7 +52,7 @@ const HEADER_DENY_LIST = new Set([
 export type Transport = 'fetch' | 'xhr';
 /** How the response reached the page — lets the panel exclude replayed traffic from new recordings. */
 export type ServedBy = 'network' | 'stub' | 'mutated';
-export type Outcome = 'ok' | 'network-error' | 'aborted';
+export type Outcome = 'pending' | 'ok' | 'network-error' | 'aborted';
 
 export interface BodySnapshot {
   text: string;

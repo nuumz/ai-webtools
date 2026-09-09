@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { BodySnapshot, ExchangeMeta } from '../../shared/capture';
+import { MAX_BODY_BYTES, type BodySnapshot, type ExchangeMeta } from '../../shared/capture';
 import type { HttpMethod } from '../../shared/types';
 import type { RuleDraft } from './RuleForm';
 import type { ExchangeBodies } from '../hooks/useNetworkLog';
@@ -29,6 +29,14 @@ export default function ExchangeDetail({ exchange, bodies, onLoadBody, onCreateR
     : 'ANY';
 
   const responsePayload = parseJson(bodies?.response?.text);
+  // A truncated body is broken JSON: stubbing it would hand the app `{}` and the
+  // page would die on the first field it reads. Say so instead of shipping it.
+  const stubBlocked =
+    bodies === undefined || responsePayload !== undefined
+      ? undefined
+      : bodies.response?.truncated
+        ? `Response is larger than ${formatCap()} and was captured truncated — it cannot be stubbed`
+        : 'Response body is not JSON — nothing to stub';
 
   const draft = (type: RuleDraft['type']): RuleDraft => ({
     type,
@@ -46,7 +54,7 @@ export default function ExchangeDetail({ exchange, bodies, onLoadBody, onCreateR
         <span>{exchange.transport.toUpperCase()}</span>
         <span aria-hidden>·</span>
         <span>{exchange.contentType || 'unknown type'}</span>
-        {exchange.outcome !== 'ok' && (
+        {exchange.outcome !== 'ok' && exchange.outcome !== 'pending' && (
           <span className="font-semibold text-bad">{exchange.outcome}</span>
         )}
       </div>
@@ -64,7 +72,8 @@ export default function ExchangeDetail({ exchange, bodies, onLoadBody, onCreateR
         <button
           onClick={() => onCreateRule(draft('STUB'))}
           className="btn btn-primary"
-          disabled={bodies === undefined}
+          disabled={bodies === undefined || stubBlocked !== undefined}
+          title={stubBlocked}
         >
           Stub this response
         </button>
@@ -93,7 +102,7 @@ function BodyBlock({ title, body }: { title: string; body?: BodySnapshot }) {
     <div>
       <p className="mb-1 text-[11px] font-semibold text-mute">
         {title}
-        {body.truncated && <span className="text-warn"> · truncated at 64 KB</span>}
+        {body.truncated && <span className="text-warn"> · truncated at {formatCap()}</span>}
         {body.redacted && <span className="text-accent"> · redacted</span>}
       </p>
       <pre className="code-block max-h-40">
@@ -101,6 +110,12 @@ function BodyBlock({ title, body }: { title: string; body?: BodySnapshot }) {
       </pre>
     </div>
   );
+}
+
+function formatCap(): string {
+  return MAX_BODY_BYTES >= 1024 * 1024
+    ? `${Math.round(MAX_BODY_BYTES / 1024 / 1024)} MB`
+    : `${Math.round(MAX_BODY_BYTES / 1024)} KB`;
 }
 
 function parseJson(text?: string): unknown {

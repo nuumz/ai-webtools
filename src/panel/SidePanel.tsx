@@ -218,11 +218,12 @@ export default function SidePanel() {
     let entries = existing ? await loadStoryEntries(story.id) : [];
     let saved = 0;
     let skipped = 0;
+    let cut = 0;
 
     for (const exchangeId of exchangeIds) {
       const meta = log.entries.find((entry) => entry.id === exchangeId);
       // Replayed traffic would record the mock as if it were real.
-      if (!meta || meta.servedBy !== 'network') {
+      if (!meta || meta.servedBy !== 'network' || meta.outcome === 'pending') {
         skipped += 1;
         continue;
       }
@@ -230,6 +231,12 @@ export default function SidePanel() {
       const text = bodies.response?.text;
       if (!text) {
         skipped += 1;
+        continue;
+      }
+      // Replaying a truncated body would serve the app broken JSON — worse than
+      // letting the request through, because it fails inside the app instead.
+      if (bodies.response?.truncated) {
+        cut += 1;
         continue;
       }
       const bodyKey = await putBody(text);
@@ -245,9 +252,13 @@ export default function SidePanel() {
         : [...stories, updated],
     );
 
+    const notes = [
+      skipped > 0 ? `skipped ${skipped}` : undefined,
+      cut > 0 ? `${cut} too large to replay` : undefined,
+    ].filter(Boolean);
     showToast(
-      skipped > 0
-        ? `Saved ${saved} to “${story.name}” · skipped ${skipped}`
+      notes.length > 0
+        ? `Saved ${saved} to “${story.name}” · ${notes.join(' · ')}`
         : `Saved ${saved} to “${story.name}”`,
     );
   };

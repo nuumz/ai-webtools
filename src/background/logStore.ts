@@ -8,7 +8,7 @@ import {
 } from '../shared/capture';
 
 const MAX_ENTRIES_PER_TAB = 500;
-const MAX_BYTES_PER_TAB = 8 * 1024 * 1024;
+const MAX_BYTES_PER_TAB = 16 * 1024 * 1024;
 const SESSION_PREFIX = 'log:';
 const MIRROR_DEBOUNCE_MS = 1000;
 
@@ -39,26 +39,48 @@ const tabLog = (tabId: number): TabLog => {
 
 export function addExchanges(tabId: number, exchanges: CapturedExchange[]): ExchangeMeta[] {
   const log = tabLog(tabId);
-  const added: ExchangeMeta[] = [];
+  const changed: ExchangeMeta[] = [];
 
   for (const exchange of exchanges) {
     const meta = toExchangeMeta(exchange);
-    log.entries.push(meta);
+    const nextBytes =
+      (exchange.requestBody?.text.length ?? 0) + (exchange.responseBody?.text.length ?? 0);
+    const index = log.entries.findIndex((entry) => entry.id === meta.id);
+    if (index >= 0) {
+      const previous = log.bodies.get(meta.id);
+      log.bytes -= (previous?.request?.text.length ?? 0) + (previous?.response?.text.length ?? 0);
+      log.entries[index] = meta;
+    } else {
+      log.entries.push(meta);
+    }
     log.bodies.set(meta.id, { request: exchange.requestBody, response: exchange.responseBody });
-    log.bytes += (exchange.requestBody?.text.length ?? 0) + (exchange.responseBody?.text.length ?? 0);
-    added.push(meta);
+    log.bytes += nextBytes;
+    changed.push(meta);
   }
 
-  while (log.entries.length > MAX_ENTRIES_PER_TAB || (log.bytes > MAX_BYTES_PER_TAB && log.entries.length > 1)) {
+  // Bodies are what blow the byte budget, and the row is the part the user reads,
+  // so the oldest bodies go first and the list itself survives.
+  for (const entry of log.entries) {
+    if (log.bytes <= MAX_BYTES_PER_TAB) break;
+    if (!log.bodies.has(entry.id)) continue;
+    dropBodies(log, entry.id);
+  }
+
+  while (log.entries.length > MAX_ENTRIES_PER_TAB) {
     const evicted = log.entries.shift();
     if (!evicted) break;
-    const bodies = log.bodies.get(evicted.id);
-    log.bytes -= (bodies?.request?.text.length ?? 0) + (bodies?.response?.text.length ?? 0);
-    log.bodies.delete(evicted.id);
+    dropBodies(log, evicted.id);
   }
 
   scheduleMirror();
-  return added;
+  return changed;
+}
+
+function dropBodies(log: TabLog, exchangeId: string): void {
+  const bodies = log.bodies.get(exchangeId);
+  if (!bodies) return;
+  log.bytes -= (bodies.request?.text.length ?? 0) + (bodies.response?.text.length ?? 0);
+  log.bodies.delete(exchangeId);
 }
 
 export function addDropped(tabId: number, count: number): number {

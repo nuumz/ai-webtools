@@ -132,10 +132,10 @@ function install(): void {
     }
   };
 
-  const emit = (exchange: CapturedExchange): void => {
+  const emit = (exchange: CapturedExchange, immediate = false): void => {
     if (!settings.captureEnabled) return;
     queue.push(exchange);
-    if (queue.length >= FLUSH_MAX) flush();
+    if (immediate || queue.length >= FLUSH_MAX) flush();
     else if (flushTimer === undefined) flushTimer = window.setTimeout(flush, FLUSH_MS);
   };
 
@@ -263,6 +263,26 @@ function install(): void {
     // Nothing to do at all: hand straight to the network.
     if (!rule && !capture && !isStrictMiss(absoluteUrl)) return nativeFetch(input, init);
 
+    const id = newExchangeId();
+    if (capture) {
+      emit(
+        {
+          id,
+          startedAt,
+          durationMs: 0,
+          transport: 'fetch',
+          servedBy: 'network',
+          outcome: 'pending',
+          method,
+          url: absoluteUrl,
+          status: 0,
+          statusText: '',
+          contentType: '',
+        },
+        true,
+      );
+    }
+
     const requestHeaders = capture ? readRequestHeaders(input, init) : undefined;
     let requestText = capture ? await readRequestBody(input, init) : undefined;
 
@@ -274,7 +294,7 @@ function install(): void {
     ): void => {
       if (!capture) return;
       emit({
-        id: newExchangeId(),
+        id,
         startedAt,
         durationMs: Math.round(performance.now() - started),
         transport: 'fetch',
@@ -482,6 +502,7 @@ function install(): void {
     private _requestText?: string;
     private _requestHeaders: Record<string, string> = {};
     private _captureBound = false;
+    private _exchangeId = '';
     private _sendBody?: Document | XMLHttpRequestBodyInit | null;
     private _fault?: Fault;
 
@@ -667,6 +688,23 @@ function install(): void {
     private _bindCapture(): void {
       if (this._captureBound || !settings.captureEnabled) return;
       this._captureBound = true;
+      this._exchangeId = newExchangeId();
+      emit(
+        {
+          id: this._exchangeId,
+          startedAt: this._startedAt,
+          durationMs: 0,
+          transport: 'xhr',
+          servedBy: 'network',
+          outcome: 'pending',
+          method: this._method,
+          url: this._url,
+          status: 0,
+          statusText: '',
+          contentType: '',
+        },
+        true,
+      );
       const report = (outcome: Outcome) => {
         const servedBy: ServedBy = this._stub
           ? 'stub'
@@ -674,7 +712,7 @@ function install(): void {
             ? 'mutated'
             : 'network';
         emit({
-          id: newExchangeId(),
+          id: this._exchangeId,
           startedAt: this._startedAt,
           durationMs: Math.round(performance.now() - this._started),
           transport: 'xhr',
