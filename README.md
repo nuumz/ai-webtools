@@ -31,13 +31,17 @@ Full stubbing is still available when you want the network out of the picture en
 
 | File | World | Responsibility |
 | --- | --- | --- |
-| `src/panel/*` | Extension page | React UI: network log, rule CRUD, auto-fill mappings |
+| `src/panel/*` | Extension page | React UI: network log, rule CRUD, form profiles |
+| `src/inject/formAgent.ts` | Injected into the page | Fills, records and picks fields across frames and shadow roots |
 | `src/background/index.ts` | Service worker | Opens the panel, seeds storage, drives the toolbar badge |
 | `src/background/router.ts` | Service worker | Port registry: page capture in, panel updates out |
 | `src/background/logStore.ts` | Service worker | Per-tab ring buffer of captured exchanges |
 | `src/content/bridge.isolated.ts` | ISOLATED | Pushes config to the page, forwards capture, serves story bodies |
 | `src/content/interceptor.main.ts` | MAIN | Patches `window.fetch` and `XMLHttpRequest` |
 | `src/shared/story.ts` | Everywhere | Story/entry model, replay sequencing, exchange → entry |
+| `src/shared/form.ts` | Everywhere | Profiles, fields, selector chains |
+| `src/shared/expr.ts` | Panel / worker | The value expression language (no `eval`) |
+| `src/shared/resolveProfile.ts` | Panel / worker | Dependency ordering, sequences, resolved values |
 | `src/shared/bodyStore.ts` | Everywhere | Content-addressed body storage with garbage collection |
 | `src/shared/*` | Everywhere | Rule types, URL matching, deep merge, capture + redaction, storage |
 
@@ -122,13 +126,60 @@ shows `OFF` when it is off, `REC` while recording, and the active rule count oth
 `URLPattern` is used when the browser exposes it; otherwise a glob → RegExp fallback keeps
 matching working. Relative request URLs are resolved against the page URL before matching.
 
-## Auto-fill
+## Form profiles
 
-The panel's **Auto-Fill Form** button injects a script into the active tab (via
-`chrome.scripting.executeScript`) that writes each configured `selector → value` pair.
-Values are written through the native `HTMLInputElement.prototype.value` setter and
-followed by `input`/`change` events, so React and Vue value trackers pick the change up
-instead of silently reverting it. Mappings are editable in the *Auto-Fill Fields* card.
+A **profile** is a named set of fields that knows how to find each input and how to
+produce its value. *Fill form* writes them all in one go — across iframes and open shadow
+roots — and reports anything it could not find instead of failing silently.
+
+**Values** come in four flavours:
+
+| Kind | Example | Use |
+| --- | --- | --- |
+| Text | `tester@dev.local` | a constant |
+| Template | `qa+{{seq('user')}}@dev.local` | text with computed holes |
+| Same as | `password` | mirror another field (confirm-password) |
+| Formula | `qty * price` | derive from other fields |
+
+Templates and formulas share one small expression language: arithmetic, comparisons,
+ternaries and a fixed function list (`round sum upper lower trim pad len now randInt
+randPick uuid seq`). It is a hand-written parser, never `eval`, and it runs in the panel —
+only finished strings reach the page. Fields are ordered by their dependencies, so a
+formula can sit above the values it reads; a circular reference is reported, not looped.
+`seq('name')` draws **once per fill**, so every field referencing it agrees, and the
+counter continues on the next run — which is what makes repeat signups with unique emails
+work.
+
+**Finding the input**: each field holds a list of selectors tried in order — `testid`,
+`id`, `name`, `label` text, `aria`, `placeholder`, `css` — and the first one that matches
+exactly one visible, enabled element wins. Add fallbacks for inputs whose id changes
+between renders.
+
+You do not have to type any of that:
+
+- **◎ Pick** highlights elements as you move over the page; click one and its selector
+  chain (plus its current value) lands in the profile. Works inside iframes and open
+  shadow roots; Esc cancels. Picking from a field's own row replaces just that field's
+  selectors.
+- **⤓ Record** reads every filled-in field on the page and offers them as a checklist —
+  fill a form by hand once, then keep the fields you want. Passwords are left out unless
+  you tick *include passwords*.
+- **`Alt+Shift+F`** fills without opening the panel at all. It uses the profile you last
+  filled with on that origin, else one whose site scope matches, else the only profile you
+  have; the toolbar badge flashes how many fields it filled. Rebind it under
+  `chrome://extensions/shortcuts`.
+
+Values are written through the native `HTMLInputElement.prototype.value` setter followed
+by `input`/`change`, so React and Vue value trackers see the change instead of reverting
+it. `<select>` accepts an option's value *or* its visible text; checkboxes take
+`true`/`false`; `contenteditable` works. A field can wait N ms after filling, which is how
+dependent dropdowns are handled — fill the country, wait for the app to load cities, then
+fill the city. A field can also be pinned to a frame whose URL contains a given string.
+
+Filling uses `chrome.scripting.executeScript` with `allFrames`, backed by
+`host_permissions`, rather than `activeTab`: the `activeTab` grant is revoked on
+navigation, so the button used to go quiet as soon as you moved to the next page. The
+permission prompt is unchanged, since the content scripts already match all URLs.
 
 ## Build & load
 
@@ -146,11 +197,16 @@ Other scripts:
 npm run dev            # Vite dev server for the panel UI alone
 npm run watch:scripts  # rebuild worker/content scripts on change
 npm run typecheck
-npm run test:e2e       # rule engine + capture + story suites (headless)
+npm run test:unit      # vitest: expression language, profile resolution, profile picking
+npm run test:e2e       # rule engine, capture, story and form suites (headless)
 npm run test:ext       # loads dist/ as a real extension; needs a display: xvfb-run -a npm run test:ext
 ```
 
-Both test commands need `npm run build` first and `npm i -D playwright && npx playwright
+`demo/index.html` is the form fixture the tests drive (iframe, shadow DOM, dependent
+dropdown, contenteditable); the e2e server also serves it at `/demo` if you want to poke
+at it by hand.
+
+The e2e commands need `npm run build` first and `npm i -D playwright && npx playwright
 install chromium` — Playwright is deliberately not a devDependency, so a plain install
 stays lean. `vite build` emits the panel, and `scripts/build-scripts.mjs` bundles the
 service worker and both content scripts as self-contained IIFEs, because MV3 content
@@ -170,6 +226,10 @@ scripts cannot be ES modules.
   closes. Its metadata survives a service-worker restart; bodies do not.
 - Story replay serves the recorded body verbatim; it does not re-run any backend logic, so
   a recorded response can drift from what the API would say today.
+- A field's frame pattern is a plain substring of the frame URL, not a glob.
+- The picker runs in every frame at once; the frame you click cancels the others through a
+  `postMessage` relay, with a 60-second backstop so nothing can hang.
+- Picking cannot reach into a closed shadow root — nothing outside the component can.
 - While recording, every tab holds a port open, which keeps the service worker alive by
   design. Turn recording off when you are done.
 - Rules are stored in `chrome.storage.local` and apply to every frame of every site

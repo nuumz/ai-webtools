@@ -1,4 +1,13 @@
-import { normalizeSettings } from '../shared/storage';
+import {
+  loadCounters,
+  loadProfiles,
+  loadSettings,
+  normalizeSettings,
+  saveCounters,
+} from '../shared/storage';
+import { pickProfileForUrl } from '../shared/form';
+import { resolveProfile } from '../shared/resolveProfile';
+import { formAgent } from '../inject/formAgent';
 import { DEFAULT_FORM_FILL_FIELDS, STORAGE_KEYS, type MutationRule } from '../shared/types';
 import { initRouter } from './router';
 import { restoreFromSession } from './logStore';
@@ -34,6 +43,59 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 void refreshBadge();
+
+/**
+ * Fills the current form without opening the panel. The profile is whichever
+ * one was last used on this origin, else one scoped to the URL, else the only
+ * one there is — see pickProfileForUrl.
+ */
+chrome.commands?.onCommand.addListener((command, tab) => {
+  if (command !== 'fill-form' || tab?.id === undefined) return;
+  void fillActiveForm(tab.id, tab.url);
+});
+
+async function fillActiveForm(tabId: number, url: string | undefined): Promise<void> {
+  try {
+    const [profiles, settings, counters] = await Promise.all([
+      loadProfiles(),
+      loadSettings(),
+      loadCounters(),
+    ]);
+
+    const profile = pickProfileForUrl(profiles, url, settings.lastProfileByOrigin);
+    if (!profile) return flashBadge('?');
+
+    const resolved = resolveProfile(profile, { counters });
+    if (resolved.errors.length > 0) {
+      console.error('[DevTool] Profile has errors:', resolved.errors);
+      return flashBadge('!');
+    }
+
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: formAgent,
+      args: [{ kind: 'fill', fields: resolved.fields }],
+    });
+    await saveCounters(resolved.counters);
+
+    const filled = new Set<string>();
+    for (const entry of results) {
+      const result = entry.result as { kind?: string; filled?: string[] } | undefined;
+      if (result?.kind === 'fill') for (const key of result.filled ?? []) filled.add(key);
+    }
+    flashBadge(`✓${filled.size}`);
+  } catch (error) {
+    console.error('[DevTool] Shortcut fill failed:', error);
+    flashBadge('!');
+  }
+}
+
+/** Momentary feedback: the panel may not even be open when the shortcut runs. */
+function flashBadge(text: string): void {
+  void chrome.action.setBadgeText({ text });
+  void chrome.action.setBadgeBackgroundColor({ color: '#0f766e' });
+  setTimeout(() => void refreshBadge(), 2000);
+}
 
 /** The badge is the only always-visible signal that traffic is being touched. */
 async function refreshBadge(): Promise<void> {

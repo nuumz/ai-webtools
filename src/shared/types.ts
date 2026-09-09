@@ -44,12 +44,15 @@ export interface Settings {
   enabled: boolean;
   captureEnabled: boolean;
   redactKeys: string[];
+  /** Origin → profile id, so the keyboard shortcut fills with what you last used there. */
+  lastProfileByOrigin: Record<string, string>;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   enabled: true,
   captureEnabled: false,
   redactKeys: DEFAULT_REDACT_KEYS,
+  lastProfileByOrigin: {},
 };
 
 /** What the bridge pushes into the MAIN world on every change. */
@@ -74,6 +77,8 @@ export const STORAGE_KEYS = {
   formFill: 'formFillFields',
   settings: 'settings',
   stories: 'stories',
+  profiles: 'formProfiles',
+  counters: 'counters',
 } as const;
 
 /** Entries live under their own key so a storage change touches one story, not all of them. */

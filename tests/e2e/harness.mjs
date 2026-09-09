@@ -38,6 +38,15 @@ export async function startServer() {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(PAGE);
     }
+    // The form fixture, also usable by hand: `npx serve demo`.
+    if (url.pathname === '/demo' || url.pathname === '/demo/index.html') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      return res.end(readFileSync('demo/index.html', 'utf8'));
+    }
+    if (url.pathname === '/demo/frame.html') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      return res.end(readFileSync('demo/frame.html', 'utf8'));
+    }
     if (url.pathname === '/api/users/1') {
       return json({ status: 'PENDING', user: { name: 'real', role: 'USER' } });
     }
@@ -106,6 +115,14 @@ export async function openPage(browser, config, { bodies = {} } = {}) {
 export async function drainCaptures(page) {
   await page.waitForTimeout(250);
   return page.evaluate(() => window.__captured ?? []);
+}
+
+/** Loads the built form agent into every frame of a page, as executeScript would. */
+export async function openFormPage(browser, base) {
+  const page = await browser.newPage();
+  await page.addInitScript({ content: readFileSync('dist/formAgent.js', 'utf8') });
+  await page.goto(`${base}/demo`);
+  return page;
 }
 
 export function createChecker(suite) {
