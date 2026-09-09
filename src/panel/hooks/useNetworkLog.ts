@@ -27,6 +27,14 @@ export interface NetworkLogState {
 
 const NOT_FOUND: ExchangeBodies = { found: false };
 const BODY_TIMEOUT_MS = 3000;
+/**
+ * The worker is terminated whenever it goes idle, which drops this port. Nothing
+ * else brings it back — so the panel reconnects itself, and pings often enough
+ * that a recording in progress does not sit behind a dead channel.
+ */
+const KEEPALIVE_MS = 20_000;
+const RECONNECT_BASE_MS = 250;
+const RECONNECT_MAX_MS = 5000;
 
 /**
  * The service worker opens the panel as `index.html?tabId=<id>`, which is what
@@ -60,70 +68,114 @@ export function useNetworkLog(): NetworkLogState {
   useEffect(() => {
     if (typeof chrome === 'undefined' || !chrome.runtime?.connect) return;
 
-    let port: chrome.runtime.Port;
-    try {
-      port = chrome.runtime.connect({ name: PORT_PANEL });
-    } catch {
-      return;
-    }
-    portRef.current = port;
-    setConnected(true);
+    let disposed = false;
+    let attempt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let keepalive: ReturnType<typeof setInterval> | undefined;
 
-    port.onMessage.addListener((raw) => {
-      const message = raw as BgToPanel;
-      switch (message.kind) {
-        case 'tab/changed':
-          setTabId(message.tabId);
-          setTabUrl(message.url);
-          setPinned(message.pinned);
-          setTabClosed(false);
-          break;
-        case 'tab/closed':
-          setTabClosed(true);
-          break;
-        case 'log/reset':
-          setEntries(message.entries);
-          setDropped(message.dropped);
-          setBodies({});
-          break;
-        case 'log/append':
-          if (message.entries.length > 0) {
-            setEntries((current) => mergeLogEntries(current, message.entries));
-          }
-          setDropped(message.dropped);
-          break;
-        case 'log/body': {
-          const value: ExchangeBodies = {
-            found: message.found,
-            request: message.request,
-            response: message.response,
-          };
-          setBodies((current) => ({ ...current, [message.exchangeId]: value }));
-          const waiters = bodyWaiters.current.get(message.exchangeId);
-          if (waiters) {
-            bodyWaiters.current.delete(message.exchangeId);
-            for (const resolve of waiters) resolve(value);
-          }
-          break;
-        }
+    const stopKeepalive = () => {
+      if (keepalive === undefined) return;
+      clearInterval(keepalive);
+      keepalive = undefined;
+    };
+
+    const scheduleReconnect = () => {
+      if (disposed || retryTimer !== undefined) return;
+      // The worker restarts on demand, so the first retry is almost always the
+      // one that lands; the backoff only guards a genuinely broken runtime.
+      const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** attempt);
+      attempt += 1;
+      retryTimer = setTimeout(() => {
+        retryTimer = undefined;
+        connect();
+      }, delay);
+    };
+
+    const connect = () => {
+      if (disposed) return;
+
+      let port: chrome.runtime.Port;
+      try {
+        port = chrome.runtime.connect({ name: PORT_PANEL });
+      } catch {
+        scheduleReconnect();
+        return;
       }
-    });
+      portRef.current = port;
+      setConnected(true);
+      attempt = 0;
 
-    port.onDisconnect.addListener(() => {
-      portRef.current = null;
-      setConnected(false);
-    });
+      port.onMessage.addListener((raw) => {
+        const message = raw as BgToPanel;
+        switch (message.kind) {
+          case 'tab/changed':
+            setTabId(message.tabId);
+            setTabUrl(message.url);
+            setPinned(message.pinned);
+            setTabClosed(false);
+            break;
+          case 'tab/closed':
+            setTabClosed(true);
+            break;
+          case 'log/reset':
+            setEntries(message.entries);
+            setDropped(message.dropped);
+            setBodies({});
+            break;
+          case 'log/append':
+            if (message.entries.length > 0) {
+              setEntries((current) => mergeLogEntries(current, message.entries));
+            }
+            setDropped(message.dropped);
+            break;
+          case 'log/body': {
+            const value: ExchangeBodies = {
+              found: message.found,
+              request: message.request,
+              response: message.response,
+            };
+            setBodies((current) => ({ ...current, [message.exchangeId]: value }));
+            const waiters = bodyWaiters.current.get(message.exchangeId);
+            if (waiters) {
+              bodyWaiters.current.delete(message.exchangeId);
+              for (const resolve of waiters) resolve(value);
+            }
+            break;
+          }
+        }
+      });
 
-    if (pinnedTabId !== undefined) {
-      send(port, { kind: 'log/subscribe', tabId: pinnedTabId });
-    } else {
-      void subscribePanel(port);
-    }
+      port.onDisconnect.addListener(() => {
+        if (portRef.current === port) portRef.current = null;
+        setConnected(false);
+        stopKeepalive();
+        // Not an error: an idle worker is torn down and rebuilt on the next
+        // connect. Re-subscribing is what makes recording survive that.
+        scheduleReconnect();
+      });
+
+      if (pinnedTabId !== undefined) {
+        send(port, { kind: 'log/subscribe', tabId: pinnedTabId });
+      } else {
+        void subscribePanel(port);
+      }
+
+      keepalive = setInterval(() => {
+        const current = portRef.current;
+        if (current) send(current, { kind: 'panel/ping' });
+      }, KEEPALIVE_MS);
+    };
+
+    connect();
 
     return () => {
+      disposed = true;
+      stopKeepalive();
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
+      const port = portRef.current;
       portRef.current = null;
       try {
-        port.disconnect();
+        port?.disconnect();
       } catch {
         // Already gone.
       }

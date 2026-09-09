@@ -250,6 +250,19 @@
     color: var(--color-accent);
   }
 
+  .chip-pending {
+    border-color: oklch(78% 0.1 72 / 0.4);
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+    animation: pending-pulse 1.2s ease-in-out infinite;
+  }
+
+  @keyframes pending-pulse {
+    50% {
+      opacity: 0.55;
+    }
+  }
+
   .code-block {
     margin: 0;
     padding: 0.5rem;

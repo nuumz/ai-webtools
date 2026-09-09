@@ -139,12 +139,15 @@ export default function NetworkLogCard({
                       <span
                         className={`w-8 shrink-0 font-mono text-[10px] font-semibold tabular-nums ${statusColor(exchange)}`}
                       >
-                        {exchange.outcome === 'pending' ? '…' : exchange.status || '—'}
+                        {exchange.outcome === 'pending' && !exchange.status ? '…' : exchange.status || '—'}
                       </span>
                       <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink" title={exchange.url}>
                         {exchange.pathname}
                         {exchange.search && <span className="text-faint">{exchange.search}</span>}
                       </span>
+                      {exchange.outcome === 'pending' && (
+                        <span className="chip chip-pending shrink-0">in progress</span>
+                      )}
                       {exchange.servedBy !== 'network' && <ServedByChip servedBy={exchange.servedBy} />}
                     </span>
                     <span className="flex items-center gap-2 pl-[4.6rem] font-mono text-[10px] tabular-nums text-faint">

@@ -7,7 +7,12 @@ export const PORT_PAGE = 'devtool.page';
 export const PORT_PANEL = 'devtool.panel';
 
 export type PageToBg =
-  | { kind: 'page/hello'; url: string; isTop: boolean }
+  /**
+   * `fresh` separates a new document from a mere port reconnect: the worker is
+   * terminated whenever it goes idle, and re-opening that port must not read as
+   * a navigation, or the tab's log is thrown away while the page is still live.
+   */
+  | { kind: 'page/hello'; url: string; isTop: boolean; fresh: boolean }
   | { kind: 'capture/exchange'; exchanges: CapturedExchange[] }
   | { kind: 'capture/dropped'; count: number };
 
@@ -15,6 +20,8 @@ export type PanelToBg =
   /** `tabId` pins the panel to the tab it was opened from; `windowId` is the
    *  unpinned fallback (follow whichever tab is active in that window). */
   | { kind: 'log/subscribe'; tabId?: number; windowId?: number }
+  /** Traffic alone can leave the worker idle long enough to be killed mid-recording. */
+  | { kind: 'panel/ping' }
   | { kind: 'log/clear' }
   | { kind: 'log/getBody'; exchangeId: string };
 

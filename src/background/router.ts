@@ -75,45 +75,55 @@ function handlePagePort(port: chrome.runtime.Port): void {
   if (tabId === undefined) return;
 
   port.onMessage.addListener((raw) => {
-    const message = raw as PageToBg;
-    switch (message.kind) {
-      case 'page/hello':
-        if (message.isTop) {
-          const previousUrl = tabUrls.get(tabId);
-          tabUrls.set(tabId, message.url);
-          /* Port reconnects (SW idle) reuse the URL — do not wipe the log. */
-          if (previousUrl !== message.url) clearTab(tabId);
-          claimOrphanPanels(tabId, message.url);
-          broadcast(tabId, (panelPort) => {
-            const state = panelPorts.get(panelPort);
-            sendToPanel(panelPort, {
-              kind: 'tab/changed',
-              tabId,
-              url: message.url,
-              pinned: state?.pinned ?? false,
-            });
-            sendLogReset(panelPort, tabId);
-          });
-        }
-        break;
-      case 'capture/exchange': {
-        const entries = addExchanges(tabId, message.exchanges);
-        if (entries.length === 0) break;
-        const { dropped } = getEntries(tabId);
-        broadcast(tabId, (panelPort) =>
-          sendToPanel(panelPort, { kind: 'log/append', tabId, entries, dropped }),
-        );
-        break;
-      }
-      case 'capture/dropped': {
-        const dropped = addDropped(tabId, message.count);
-        broadcast(tabId, (panelPort) =>
-          sendToPanel(panelPort, { kind: 'log/append', tabId, entries: [], dropped }),
-        );
-        break;
-      }
-    }
+    // The worker may have restarted a moment ago: let the session mirror land
+    // before the first capture is folded in, or restoring finds a log that has
+    // already been overwritten with just that one record.
+    void restoreFromSession().then(() => handlePageMessage(tabId, raw as PageToBg));
   });
+}
+
+function handlePageMessage(tabId: number, message: PageToBg): void {
+  switch (message.kind) {
+    case 'page/hello':
+      if (message.isTop) {
+        tabUrls.set(tabId, message.url);
+        // A new document starts a new log. A port reconnect after the worker
+        // was killed for being idle is not a load, and clearing there would
+        // delete a recording the live page is still adding to — while a reload
+        // of the same URL is a new document, which the URL alone cannot tell.
+        if (message.fresh) clearTab(tabId);
+        claimOrphanPanels(tabId, message.url);
+        broadcast(tabId, (panelPort) => {
+          const state = panelPorts.get(panelPort);
+          sendToPanel(panelPort, {
+            kind: 'tab/changed',
+            tabId,
+            url: message.url,
+            pinned: state?.pinned ?? false,
+          });
+          // On a reconnect the worker's view may still be re-hydrating; the
+          // panel already holds the rows, so only a real load resets it.
+          if (message.fresh) sendLogReset(panelPort, tabId);
+        });
+      }
+      break;
+    case 'capture/exchange': {
+      const entries = addExchanges(tabId, message.exchanges);
+      if (entries.length === 0) break;
+      const { dropped } = getEntries(tabId);
+      broadcast(tabId, (panelPort) =>
+        sendToPanel(panelPort, { kind: 'log/append', tabId, entries, dropped }),
+      );
+      break;
+    }
+    case 'capture/dropped': {
+      const dropped = addDropped(tabId, message.count);
+      broadcast(tabId, (panelPort) =>
+        sendToPanel(panelPort, { kind: 'log/append', tabId, entries: [], dropped }),
+      );
+      break;
+    }
+  }
 }
 
 function handlePanelPort(port: chrome.runtime.Port): void {
@@ -139,6 +149,9 @@ function handlePanelPort(port: chrome.runtime.Port): void {
           state.tabId = tabId;
           void attachToTab(port, tabId);
         });
+        break;
+      case 'panel/ping':
+        // Nothing to answer: the message itself is what resets the worker's idle timer.
         break;
       case 'log/clear':
         if (state.tabId !== undefined) {

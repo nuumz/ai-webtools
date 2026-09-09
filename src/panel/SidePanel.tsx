@@ -420,6 +420,10 @@ export default function SidePanel() {
     setProfileId(remaining[0]?.id);
   };
 
+  // The worker is torn down whenever it idles; the panel reconnects itself, and
+  // this is the only place the user can see that the log is momentarily behind.
+  const reconnecting = !log.connected && !log.tabClosed && log.tabUrl !== undefined;
+
   const activeCount = rules.filter((rule) => rule.isActive).length;
 
   const activeStories = stories.filter((story) => story.isActive).length;
@@ -430,12 +434,22 @@ export default function SidePanel() {
         <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">
           <span className="shrink-0 text-[13px] font-semibold tracking-tight">Dev Interceptor</span>
           <span
-            className={`min-w-0 flex-1 truncate font-mono text-[11px] ${log.tabClosed ? 'text-bad' : 'text-faint'}`}
-            title={log.tabClosed ? 'The tab this panel belongs to was closed' : log.tabUrl}
+            className={`min-w-0 flex-1 truncate font-mono text-[11px] ${
+              log.tabClosed ? 'text-bad' : reconnecting ? 'text-warn' : 'text-faint'
+            }`}
+            title={
+              log.tabClosed
+                ? 'The tab this panel belongs to was closed'
+                : reconnecting
+                  ? 'The background worker went idle — reconnecting'
+                  : log.tabUrl
+            }
           >
             {log.tabClosed
               ? 'tab closed'
-              : (hostOf(log.tabUrl) ?? (log.connected ? 'waiting for the page…' : 'not connected'))}
+              : reconnecting
+                ? 'reconnecting…'
+                : (hostOf(log.tabUrl) ?? (log.connected ? 'waiting for the page…' : 'not connected'))}
           </span>
           <button
             onClick={fillForm}

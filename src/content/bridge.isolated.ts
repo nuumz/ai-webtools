@@ -26,7 +26,19 @@ const SYNC_DEBOUNCE_MS = 50;
 /** Ceiling on records forwarded per second; the excess is counted, not queued. */
 const RATE_LIMIT_PER_SEC = 50;
 
-let settings: Settings = normalizeSettings(undefined);
+const readCaptureFlag = (): boolean => {
+  try {
+    return sessionStorage.getItem(CAPTURE_FLAG) === '1';
+  } catch {
+    return false;
+  }
+};
+
+/*
+ * Seed recording from the same session flag the interceptor uses. chrome.storage
+ * is async, and dropping in-flight rows until it lands is how pending never paints.
+ */
+let settings: Settings = { ...normalizeSettings(undefined), captureEnabled: readCaptureFlag() };
 let lastPushed = '';
 let lastCapture = '';
 let syncTimer: ReturnType<typeof setTimeout> | undefined;
@@ -111,6 +123,12 @@ const schedulePush = (): void => {
 // ------------------------------------------------------------------ port side
 
 let port: chrome.runtime.Port | undefined;
+/**
+ * This module lives as long as the document, so the first hello is the only one
+ * that means "new page"; every later one is this frame re-attaching to a worker
+ * that was terminated for being idle.
+ */
+let helloSent = false;
 
 /** Connects as soon as config is known, so the panel can bind this tab before Record. */
 const syncPort = (): void => {
@@ -131,7 +149,8 @@ const openPort = (): chrome.runtime.Port | undefined => {
     } catch {
       isTop = false;
     }
-    post({ kind: 'page/hello', url: location.href, isTop });
+    post({ kind: 'page/hello', url: location.href, isTop, fresh: !helloSent });
+    helloSent = true;
     return port;
   } catch {
     port = undefined;
@@ -139,13 +158,15 @@ const openPort = (): chrome.runtime.Port | undefined => {
   }
 };
 
-const post = (message: PageToBg): void => {
+const post = (message: PageToBg): boolean => {
   const target = port ?? openPort();
-  if (!target) return;
+  if (!target) return false;
   try {
     target.postMessage(message);
+    return true;
   } catch {
     port = undefined;
+    return false;
   }
 };
 
@@ -165,8 +186,11 @@ const takeToken = (): boolean => {
 };
 
 const forwardCapture = (raw: string): void => {
-  if (!settings.captureEnabled || !raw || raw === lastCapture) return;
-  lastCapture = raw;
+  /*
+   * Trust the interceptor: it already gated on recording. Gating again here drops
+   * the pending row while this world still has the default captureEnabled=false.
+   */
+  if (!raw || raw === lastCapture) return;
   let batch: CapturedExchange[];
   try {
     batch = JSON.parse(raw || '[]') as CapturedExchange[];
@@ -174,13 +198,16 @@ const forwardCapture = (raw: string): void => {
     return;
   }
 
-  const accepted = batch.filter(() => {
+  const accepted = batch.filter((exchange) => {
+    if (exchange.outcome === 'pending') return true;
     if (takeToken()) return true;
     dropped += 1;
     return false;
   });
 
-  if (accepted.length > 0) post({ kind: 'capture/exchange', exchanges: accepted });
+  if (accepted.length > 0) {
+    if (post({ kind: 'capture/exchange', exchanges: accepted })) lastCapture = raw;
+  }
   if (dropped > 0) {
     post({ kind: 'capture/dropped', count: dropped });
     dropped = 0;

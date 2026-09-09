@@ -26,7 +26,7 @@ interface TabLog {
 
 const logs = new Map<number, TabLog>();
 let mirrorTimer: ReturnType<typeof setTimeout> | undefined;
-let restored = false;
+let restored: Promise<void> | undefined;
 
 const tabLog = (tabId: number): TabLog => {
   let log = logs.get(tabId);
@@ -118,10 +118,17 @@ function scheduleMirror(): void {
   }, MIRROR_DEBOUNCE_MS);
 }
 
-/** Re-hydrates metadata after the worker was terminated. Safe to call repeatedly. */
-export async function restoreFromSession(): Promise<void> {
-  if (restored) return;
-  restored = true;
+/**
+ * Re-hydrates metadata after the worker was terminated. Safe to call repeatedly:
+ * every caller awaits the same read, so a panel that attaches while the first
+ * restore is still in flight is not handed an empty log.
+ */
+export function restoreFromSession(): Promise<void> {
+  restored ??= readSession();
+  return restored;
+}
+
+async function readSession(): Promise<void> {
   try {
     const stored = await chrome.storage.session?.get(null);
     for (const [key, value] of Object.entries(stored ?? {})) {

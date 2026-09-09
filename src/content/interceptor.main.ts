@@ -132,11 +132,48 @@ function install(): void {
     }
   };
 
+  const capturing = (): boolean => settings.captureEnabled || readCaptureFlag();
+
   const emit = (exchange: CapturedExchange, immediate = false): void => {
-    if (!settings.captureEnabled) return;
+    if (!capturing()) return;
+    /*
+     * In-flight rows must travel alone. A pending+complete batch of the same id
+     * is one panel setState, so the list paints only the finished row.
+     */
+    if (exchange.outcome === 'pending' || immediate) {
+      const held = queue;
+      const heldTimer = flushTimer;
+      queue = [exchange];
+      flushTimer = undefined;
+      flush();
+      queue = held.concat(queue);
+      flushTimer = heldTimer;
+      if (queue.length > 0 && flushTimer === undefined) {
+        flushTimer = window.setTimeout(flush, FLUSH_MS);
+      }
+      return;
+    }
     queue.push(exchange);
-    if (immediate || queue.length >= FLUSH_MAX) flush();
+    if (queue.length >= FLUSH_MAX) flush();
     else if (flushTimer === undefined) flushTimer = window.setTimeout(flush, FLUSH_MS);
+  };
+
+  const emitPending = (
+    exchange: Omit<CapturedExchange, 'outcome' | 'servedBy' | 'durationMs' | 'status' | 'statusText' | 'contentType'> &
+      Partial<CapturedExchange>,
+  ): void => {
+    emit(
+      {
+        durationMs: 0,
+        servedBy: 'network',
+        status: 0,
+        statusText: '',
+        contentType: '',
+        ...exchange,
+        outcome: 'pending',
+      },
+      true,
+    );
   };
 
   const snapshot = (text: string | undefined) =>
@@ -242,7 +279,7 @@ function install(): void {
   ): Promise<Response> {
     const startedAt = Date.now();
     const started = performance.now();
-    const capture = settings.captureEnabled;
+    const capture = capturing();
 
     let rule: CompiledRule | undefined;
     let absoluteUrl = '';
@@ -265,22 +302,13 @@ function install(): void {
 
     const id = newExchangeId();
     if (capture) {
-      emit(
-        {
-          id,
-          startedAt,
-          durationMs: 0,
-          transport: 'fetch',
-          servedBy: 'network',
-          outcome: 'pending',
-          method,
-          url: absoluteUrl,
-          status: 0,
-          statusText: '',
-          contentType: '',
-        },
-        true,
-      );
+      emitPending({
+        id,
+        startedAt,
+        transport: 'fetch',
+        method,
+        url: absoluteUrl,
+      });
     }
 
     const requestHeaders = capture ? readRequestHeaders(input, init) : undefined;
@@ -418,6 +446,23 @@ function install(): void {
     } catch (err) {
       finish(undefined, 'network', isAbortError(err) ? 'aborted' : 'network-error');
       throw err;
+    }
+
+    if (capture) {
+      emitPending({
+        id,
+        startedAt,
+        durationMs: Math.round(performance.now() - started),
+        transport: 'fetch',
+        method,
+        url: absoluteUrl,
+        status: response.status,
+        statusText: response.statusText,
+        contentType: response.headers.get('content-type') ?? '',
+        requestHeaders: requestHeaders && redactHeaders(requestHeaders, settings.redactKeys),
+        responseHeaders: redactHeaders(headersToObject(response.headers), settings.redactKeys),
+        requestBody: snapshot(requestText),
+      });
     }
 
     // --- Response mutation: merge the override into the real payload.
@@ -684,27 +729,18 @@ function install(): void {
       return mutated;
     }
 
-    /** Mirrors the finished exchange to the log, whatever served it. */
+    /** Mirrors the exchange as soon as send() runs, then again when headers land. */
     private _bindCapture(): void {
-      if (this._captureBound || !settings.captureEnabled) return;
+      if (this._captureBound || !capturing()) return;
       this._captureBound = true;
       this._exchangeId = newExchangeId();
-      emit(
-        {
-          id: this._exchangeId,
-          startedAt: this._startedAt,
-          durationMs: 0,
-          transport: 'xhr',
-          servedBy: 'network',
-          outcome: 'pending',
-          method: this._method,
-          url: this._url,
-          status: 0,
-          statusText: '',
-          contentType: '',
-        },
-        true,
-      );
+      emitPending({
+        id: this._exchangeId,
+        startedAt: this._startedAt,
+        transport: 'xhr',
+        method: this._method,
+        url: this._url,
+      });
       const report = (outcome: Outcome) => {
         const servedBy: ServedBy = this._stub
           ? 'stub'
@@ -732,6 +768,25 @@ function install(): void {
           responseBody: snapshot(this._readTextForCapture()),
         });
       };
+      this.addEventListener('readystatechange', () => {
+        if (this.readyState !== XMLHttpRequest.HEADERS_RECEIVED) return;
+        emitPending({
+          id: this._exchangeId,
+          startedAt: this._startedAt,
+          durationMs: Math.round(performance.now() - this._started),
+          transport: 'xhr',
+          method: this._method,
+          url: this._url,
+          status: this.status,
+          statusText: this.statusText,
+          contentType: this.getResponseHeader('content-type') ?? '',
+          requestHeaders: redactHeaders(this._requestHeaders, settings.redactKeys),
+          responseHeaders: redactHeaders(
+            parseHeaderBlock(this.getAllResponseHeaders()),
+            settings.redactKeys,
+          ),
+        });
+      });
       this.addEventListener('load', () => report('ok'));
       this.addEventListener('error', () => report('network-error'));
       this.addEventListener('abort', () => report('aborted'));

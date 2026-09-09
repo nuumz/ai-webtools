@@ -99,6 +99,19 @@ export default async function run() {
   t.assert('real traffic is logged', summary.includes('GET /api/users/1 200 network'), summary.join(' | '));
   t.check('the badge shows recording', await worker.evaluate(() => chrome.action.getBadgeText({})), 'REC');
 
+  // Reloading the same URL is a new document: the previous page's traffic must
+  // not linger, and the log has to start over rather than accumulate.
+  await page.reload();
+  await page.evaluate(() => fetch('/api/users/1'));
+  await page.waitForTimeout(2000);
+  const afterReload = await worker.evaluate(() => chrome.storage.session.get(null));
+  const reloaded = Object.entries(afterReload).find(([key]) => key.startsWith('log:'))?.[1] ?? [];
+  t.check(
+    'a reload starts the log over',
+    reloaded.map((entry) => `${entry.method} ${entry.pathname}`),
+    ['GET /api/users/1'],
+  );
+
   await context.close();
   server.close();
   rmSync(profile, { recursive: true, force: true });
