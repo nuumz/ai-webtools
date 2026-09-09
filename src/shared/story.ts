@@ -27,6 +27,8 @@ export interface StoryMeta {
   strictPattern: string;
   matchOn: MatchOn;
   scopeOrigins: string[];
+  /** Replay each entry with the latency it was recorded at. */
+  replayTiming: boolean;
   entryCount: number;
   createdAt: number;
 }
@@ -55,6 +57,7 @@ export function newStory(name: string, matchOn: MatchOn = 'path+query'): StoryMe
     strictPattern: DEFAULT_STRICT_PATTERN,
     matchOn,
     scopeOrigins: [],
+    replayTiming: false,
     entryCount: 0,
     createdAt: Date.now(),
   };
@@ -78,6 +81,7 @@ export function entryToRule(entry: StoryEntry, story: StoryMeta): MutationRule {
     bodyKeys: entry.bodyKeys,
     cycle: entry.cycle,
     contentType: entry.contentType,
+    ...(story.replayTiming && entry.delayMs ? { delayMs: entry.delayMs } : {}),
     storyId: story.id,
     label: entry.label ?? story.name,
     ...(story.scopeOrigins.length > 0 ? { scope: { origins: story.scopeOrigins } } : {}),
@@ -103,6 +107,8 @@ export function exchangeToEntry(meta: ExchangeMeta, bodyKey: string, matchOn: Ma
     contentType: meta.contentType || 'application/json',
     bodyKeys: [bodyKey],
     cycle: 'stick-last',
+    // Remember how long the backend actually took, in case the story replays timing.
+    delayMs: Math.min(Math.round(meta.durationMs), 30_000),
     label: `${meta.method} ${meta.pathname}`,
   };
 }

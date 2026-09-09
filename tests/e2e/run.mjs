@@ -3,8 +3,9 @@ import mutation from './mutation.e2e.mjs';
 import capture from './capture.e2e.mjs';
 import story from './story.e2e.mjs';
 import form from './form.e2e.mjs';
+import fault from './fault.e2e.mjs';
 
-const suites = [mutation, capture, story, form];
+const suites = [mutation, capture, story, form, fault];
 let failures = 0;
 for (const suite of suites) failures += await suite();
 

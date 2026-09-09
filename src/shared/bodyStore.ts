@@ -45,6 +45,20 @@ export async function collectGarbage(referenced: Set<string>): Promise<number> {
   return orphans.length;
 }
 
+/**
+ * Deletes recorded bodies above a size. Entries that referenced them fall
+ * through to the real network, which is the safe direction.
+ */
+export async function trimBodies(maxBytes: number): Promise<number> {
+  if (!hasChromeStorage()) return 0;
+  const all = await chrome.storage.local.get(null);
+  const oversized = Object.entries(all)
+    .filter(([key, value]) => key.startsWith(BODY_PREFIX) && typeof value === 'string' && value.length > maxBytes)
+    .map(([key]) => key);
+  if (oversized.length > 0) await chrome.storage.local.remove(oversized);
+  return oversized.length;
+}
+
 export async function usageBytes(): Promise<number> {
   if (!hasChromeStorage()) return 0;
   try {

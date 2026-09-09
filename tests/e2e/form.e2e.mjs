@@ -118,7 +118,16 @@ export default async function run() {
 
   // ------------------------------------------------------------------ picker
 
-  const pickTop = page.evaluate(() => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick' }));
+  // Poll on an interval, not rAF: a child frame's animation frames can be
+  // throttled, which made this wait hang instead of resolving.
+  const waitForPicker = (target) =>
+    target.waitForFunction(() => window.__DEV_TOOL_PICKING__ === true, undefined, {
+      polling: 50,
+      timeout: 5000,
+    });
+
+  const pickTop = page.evaluate(() => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick', sessionId: 's1' }));
+  await waitForPicker(page);
   await page.click('#email');
   const picked = await pickTop;
   t.check('picking returns a durable selector first', picked.selectors[0], {
@@ -137,14 +146,17 @@ export default async function run() {
     'selector did not round-trip',
   );
 
-  const cancelled = page.evaluate(() => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick' }));
+  const cancelled = page.evaluate(() => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick', sessionId: 's2' }));
+  await waitForPicker(page);
   await page.keyboard.press('Escape');
   t.check('Escape cancels the picker', (await cancelled).selectors, null);
 
   // Every frame runs a picker, but only one gets clicked: the rest must cancel
   // themselves, or executeScript would never settle.
-  const topPick = page.evaluate(() => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick' }));
-  const framePick = frame.evaluate(() => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick' }));
+  const topPick = page.evaluate(() => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick', sessionId: 's3' }));
+  const framePick = frame.evaluate(() => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick', sessionId: 's3' }));
+  // Both pickers must be listening before the click, or the frame misses it.
+  await Promise.all([waitForPicker(page), waitForPicker(frame)]);
   await frame.click('#childField');
   const [topResult, framePicked] = await Promise.all([topPick, framePick]);
   t.check('the clicked frame returns its selector', framePicked.selectors?.[0]?.value, 'childField');

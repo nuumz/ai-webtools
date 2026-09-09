@@ -1,5 +1,6 @@
 /** Shared contract between the Side Panel, the bridge and the MAIN-world interceptor. */
 import { DEFAULT_REDACT_KEYS } from './capture';
+import type { PathOp } from './pathOps';
 
 export type RuleType = 'MUTATE_REQUEST' | 'MUTATE_RESPONSE' | 'STUB';
 
@@ -30,6 +31,16 @@ export interface MutationRule {
   cycle?: 'once' | 'loop' | 'stick-last';
   contentType?: string;
   storyId?: string;
+  /** Targeted edits applied after the payload merge. */
+  ops?: PathOp[];
+  /** Hold the response back, to exercise loading states. */
+  delayMs?: number;
+  jitterMs?: number;
+  /** Make the request fail the way a real one would. */
+  fault?:
+    | { kind: 'status'; status: number; body?: unknown }
+    | { kind: 'network-error' }
+    | { kind: 'timeout' };
   /** Restricts the rule to matching origins; empty/absent means every origin. */
   scope?: { origins?: string[] };
 }
@@ -46,6 +57,10 @@ export interface Settings {
   redactKeys: string[];
   /** Origin → profile id, so the keyboard shortcut fills with what you last used there. */
   lastProfileByOrigin: Record<string, string>;
+  /** Mirror settings, rules and profiles through the browser account. */
+  syncEnabled: boolean;
+  /** Last sync outcome, shown in the panel (quota errors mostly). */
+  syncStatus?: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -53,6 +68,7 @@ export const DEFAULT_SETTINGS: Settings = {
   captureEnabled: false,
   redactKeys: DEFAULT_REDACT_KEYS,
   lastProfileByOrigin: {},
+  syncEnabled: false,
 };
 
 /** What the bridge pushes into the MAIN world on every change. */
@@ -64,12 +80,6 @@ export interface PageConfig {
   storyRules?: MutationRule[];
   /** URL patterns of strict stories: a miss inside one answers 501 instead of falling through. */
   strictPatterns?: string[];
-}
-
-export interface StoredState {
-  settings: Settings;
-  mutationRules: MutationRule[];
-  formFillFields: FormFillField[];
 }
 
 export const STORAGE_KEYS = {

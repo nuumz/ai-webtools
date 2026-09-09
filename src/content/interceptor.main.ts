@@ -14,6 +14,7 @@ import {
 } from '../shared/capture';
 import { compilePattern, compileRules, findRule, toAbsoluteUrl, type CompiledRule } from '../shared/match';
 import { mergeDeep } from '../shared/merge';
+import { applyOps } from '../shared/pathOps';
 import { randomId } from '../shared/ids';
 import { bodyKeyForHit } from '../shared/story';
 import {
@@ -169,6 +170,32 @@ function install(): void {
     return text;
   };
 
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const abortError = (): DOMException =>
+    new DOMException('The operation was aborted.', 'AbortError');
+
+  /** How long this rule holds the response back. */
+  const holdFor = (rule: CompiledRule): number =>
+    (rule.delayMs ?? 0) + (rule.jitterMs ? Math.random() * rule.jitterMs : 0);
+
+  /** A delay must still be interruptible, or it breaks the very timeouts under test. */
+  const sleepUnlessAborted = (ms: number, signal?: AbortSignal | null): Promise<void> => {
+    if (!signal) return sleep(ms);
+    if (signal.aborted) return Promise.reject(abortError());
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(abortError());
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+  };
+
   /** A strict story answers 501 for anything it does not cover, instead of falling through. */
   const isStrictMiss = (url: string): boolean =>
     settings.enabled && strictMatchers.some((matches) => matches(url));
@@ -176,10 +203,10 @@ function install(): void {
   const strictBody = (url: string): string =>
     JSON.stringify({ error: 'not-in-story', message: 'No story entry matches this request.', url });
 
-  /** Applies the rule payload to a JSON string, returning null when it is not JSON. */
+  /** Applies the rule payload and its path ops to a JSON string; null when it is not JSON. */
   const mutateJsonText = (raw: string, rule: CompiledRule): string | null => {
     try {
-      return JSON.stringify(mergeDeep(JSON.parse(raw), rule.payload));
+      return JSON.stringify(applyOps(mergeDeep(JSON.parse(raw), rule.payload), rule.ops));
     } catch {
       return null;
     }
@@ -246,6 +273,50 @@ function install(): void {
         responseBody: snapshot(responseText),
       });
     };
+
+    // --- Latency and faults apply to any matched rule, whatever its type.
+    if (rule) {
+      const wait = holdFor(rule);
+      try {
+        if (wait > 0) await sleepUnlessAborted(wait, init?.signal);
+      } catch (err) {
+        finish(undefined, 'stub', 'aborted');
+        throw err;
+      }
+
+      if (rule.fault) {
+        const fault = rule.fault;
+        log(`Faulted ${absoluteUrl} (${fault.kind})`);
+
+        if (fault.kind === 'status') {
+          const body = JSON.stringify(fault.body ?? { error: 'simulated', status: fault.status });
+          const failed = new Response(body, {
+            status: fault.status,
+            headers: { 'Content-Type': 'application/json', 'X-Intercepted': 'FAULT' },
+          });
+          finish(failed, 'stub', 'ok', body);
+          return failed;
+        }
+
+        if (fault.kind === 'network-error') {
+          finish(undefined, 'stub', 'network-error');
+          // What a real fetch failure looks like to application code.
+          throw new TypeError('Failed to fetch');
+        }
+
+        // A timeout never settles on its own; the caller's signal is the only way out.
+        return new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) return;
+          const fail = () => {
+            finish(undefined, 'stub', 'aborted');
+            reject(abortError());
+          };
+          if (signal.aborted) fail();
+          else signal.addEventListener('abort', fail, { once: true });
+        });
+      }
+    }
 
     // --- Full stub: never touch the network.
     if (rule?.type === 'STUB') {
@@ -378,6 +449,8 @@ function install(): void {
     resolved: boolean;
   }
 
+  type Fault = NonNullable<CompiledRule['fault']>;
+
   class MutatedXHR extends NativeXHR {
     private _method = 'GET';
     private _url = '';
@@ -391,6 +464,7 @@ function install(): void {
     private _requestHeaders: Record<string, string> = {};
     private _captureBound = false;
     private _sendBody?: Document | XMLHttpRequestBodyInit | null;
+    private _fault?: Fault;
 
     override open(
       method: string,
@@ -406,6 +480,7 @@ function install(): void {
       this._cacheSource = undefined;
       this._requestHeaders = {};
       this._requestText = undefined;
+      this._fault = undefined;
       super.open(method, url, async, username, password);
     }
 
@@ -420,6 +495,19 @@ function install(): void {
       if (typeof body === 'string') this._requestText = body;
       this._bindCapture();
 
+      const wait = this._rule ? holdFor(this._rule) : 0;
+
+      if (this._rule?.fault) {
+        this._fault = this._rule.fault;
+        this._sendBody = body;
+        // A caller-set timeout wins: that is the deadline the app is testing.
+        const delay =
+          this._fault.kind === 'timeout' && this.timeout > 0 ? this.timeout : wait;
+        log(`Faulted ${this._url} (${this._fault.kind}, XHR)`);
+        setTimeout(() => void this._deliverSynthetic(), delay);
+        return;
+      }
+
       if (this._rule?.type === 'STUB') {
         // `send` cannot be async, so the body is resolved inside the deferred
         // delivery that already runs on a timer.
@@ -430,7 +518,7 @@ function install(): void {
           aborted: false,
           resolved: false,
         };
-        setTimeout(() => void this._deliverStub(), 0);
+        setTimeout(() => void this._deliverStub(), wait);
         return;
       }
 
@@ -456,6 +544,14 @@ function install(): void {
           log(`Mutated request to ${this._url} (XHR)`, JSON.parse(mutated));
         }
       }
+
+      // A delayed real request: hold the send itself, so timing matches fetch.
+      if (wait > 0) {
+        setTimeout(() => {
+          if (!this._stub?.aborted) super.send(outgoing);
+        }, wait);
+        return;
+      }
       super.send(outgoing);
     }
 
@@ -472,6 +568,7 @@ function install(): void {
     }
 
     private get _stubMarker(): string {
+      if (this._fault) return 'FAULT';
       if (this._stub?.status === 501 && !this._rule) return 'STRICT';
       return this._rule?.storyId ? 'STORY' : 'STUB';
     }
@@ -529,7 +626,8 @@ function install(): void {
         // `responseText` throws for non-text response types, so branch first.
         if (this.responseType === 'json') {
           const raw: unknown = super.response;
-          return raw === null || raw === undefined ? raw : mergeDeep(raw, this._rule.payload);
+          if (raw === null || raw === undefined) return raw;
+          return applyOps(mergeDeep(raw, this._rule.payload), this._rule.ops);
         }
         if (this.responseType === '' || this.responseType === 'text') return this.responseText;
       }
@@ -596,6 +694,36 @@ function install(): void {
       } catch {
         return undefined;
       }
+    }
+
+    /** Synthesises the failure the rule asked for, through the same event machinery. */
+    private async _deliverSynthetic(): Promise<void> {
+      const fault = this._fault;
+      if (!fault) return;
+
+      if (fault.kind === 'status') {
+        this._stub = {
+          status: fault.status,
+          body: JSON.stringify(fault.body ?? { error: 'simulated', status: fault.status }),
+          readyState: MutatedXHR.OPENED,
+          aborted: false,
+          resolved: true,
+        };
+        await this._deliverStub();
+        return;
+      }
+
+      // Network errors and timeouts carry no body and report status 0.
+      this._stub = {
+        status: 0,
+        body: '',
+        readyState: MutatedXHR.DONE,
+        aborted: false,
+        resolved: true,
+      };
+      this.dispatchEvent(new Event('readystatechange'));
+      this.dispatchEvent(new ProgressEvent(fault.kind === 'timeout' ? 'timeout' : 'error'));
+      this.dispatchEvent(new ProgressEvent('loadend'));
     }
 
     private async _deliverStub(): Promise<void> {

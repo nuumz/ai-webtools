@@ -3,6 +3,7 @@ import RuleForm, { type RuleDraft } from './components/RuleForm';
 import RuleList from './components/RuleList';
 import ProfilesCard from './components/ProfilesCard';
 import RecordedFieldsDialog from './components/RecordedFieldsDialog';
+import SettingsCard from './components/SettingsCard';
 import NetworkLogCard from './components/NetworkLogCard';
 import StoriesCard from './components/StoriesCard';
 import { useNetworkLog } from './hooks/useNetworkLog';
@@ -30,7 +31,8 @@ import {
 } from '../shared/form';
 import { resolveProfile } from '../shared/resolveProfile';
 import { activeTab, runFill, runPick, runRecord } from '../inject/run';
-import { collectGarbage, putBody } from '../shared/bodyStore';
+import { collectGarbage, putBody, trimBodies, usageBytes } from '../shared/bodyStore';
+import { downloadState, exportState, importState, type ImportMode } from '../shared/portable';
 import {
   addEntry,
   exchangeToEntry,
@@ -58,6 +60,8 @@ export default function SidePanel() {
   const [toast, setToast] = useState<string | null>(null);
   const [recorded, setRecorded] = useState<RecordedFieldInput[] | null>(null);
   const [includeSecrets, setIncludeSecrets] = useState(false);
+  const [usage, setUsage] = useState(0);
+  const [storageBusy, setStorageBusy] = useState<string | null>(null);
   const log = useNetworkLog();
 
   useEffect(() => {
@@ -65,6 +69,7 @@ export default function SidePanel() {
     void loadSettings().then(setSettings);
     void loadStories().then(setStories);
     void loadCounters().then(setCounters);
+    void usageBytes().then(setUsage);
     void loadProfiles().then((loaded) => {
       setProfiles(loaded);
       setProfileId((current) => current ?? loaded[0]?.id);
@@ -128,6 +133,52 @@ export default function SidePanel() {
   const deleteRule = (id: string) => {
     persistRules(rules.filter((rule) => rule.id !== id));
     if (editing?.id === id) setEditing(undefined);
+  };
+
+  const refreshUsage = () => void usageBytes().then(setUsage);
+
+  const handleExport = async () => {
+    try {
+      downloadState(await exportState());
+      showToast('Exported');
+    } catch (err) {
+      console.error('[Panel] Export failed:', err);
+      showToast('Export failed — see console');
+    }
+  };
+
+  const handleImport = async (file: File, mode: ImportMode) => {
+    try {
+      setStorageBusy(`Importing ${file.name}…`);
+      const report = await importState(JSON.parse(await file.text()), mode);
+      showToast(`Imported ${report.rules} rule(s), ${report.profiles} profile(s), ${report.stories} story(ies)`);
+      // Storage listeners re-hydrate rules and profiles; these two are read once.
+      void loadStories().then(setStories);
+      void loadCounters().then(setCounters);
+      refreshUsage();
+    } catch (err) {
+      console.error('[Panel] Import failed:', err);
+      showToast('Import failed — is that an export file?');
+    } finally {
+      setStorageBusy(null);
+    }
+  };
+
+  const handleTrim = async (maxKb: number) => {
+    setStorageBusy('Trimming…');
+    const removed = await trimBodies(maxKb * 1024);
+    setStorageBusy(null);
+    refreshUsage();
+    showToast(removed > 0 ? `Removed ${removed} large body(ies)` : 'Nothing was over the limit');
+  };
+
+  const handleCollectGarbage = async () => {
+    setStorageBusy('Checking…');
+    const entryLists = await Promise.all(stories.map((story) => loadStoryEntries(story.id)));
+    const removed = await collectGarbage(referencedBodyKeys(entryLists));
+    setStorageBusy(null);
+    refreshUsage();
+    showToast(removed > 0 ? `Deleted ${removed} unused body(ies)` : 'Nothing unused to delete');
   };
 
   const showToast = (message: string) => {
@@ -403,6 +454,17 @@ export default function SidePanel() {
           onFill={() => void fillForm()}
           onRecord={() => void recordForm()}
           onPick={(fieldId) => void pickField(fieldId)}
+        />
+
+        <SettingsCard
+          settings={settings}
+          usageBytes={usage}
+          busy={storageBusy}
+          onChange={persistSettings}
+          onExport={() => void handleExport()}
+          onImport={(file, mode) => void handleImport(file, mode)}
+          onTrim={(maxKb) => void handleTrim(maxKb)}
+          onCollectGarbage={() => void handleCollectGarbage()}
         />
 
         <h2 className="font-semibold text-gray-700 mb-3">

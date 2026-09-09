@@ -6,6 +6,7 @@ import {
   saveCounters,
 } from '../shared/storage';
 import { pickProfileForUrl } from '../shared/form';
+import { pullFromSync, pushToSync } from '../shared/sync';
 import { resolveProfile } from '../shared/resolveProfile';
 import { formAgent } from '../inject/formAgent';
 import { DEFAULT_FORM_FILL_FIELDS, STORAGE_KEYS, type MutationRule } from '../shared/types';
@@ -19,9 +20,14 @@ chrome.sidePanel
 
 initRouter();
 void restoreFromSession();
+void pullFromSync();
 
 // Seed storage so the panel and the interceptor always read a well-formed shape.
 chrome.runtime.onInstalled.addListener(async () => {
+  // Pull first: on a fresh device the account may already hold the real setup,
+  // and seeding an empty rule list over it would look like data loss.
+  await pullFromSync();
+
   const stored = await chrome.storage.local.get([
     STORAGE_KEYS.rules,
     STORAGE_KEYS.formFill,
@@ -36,9 +42,26 @@ chrome.runtime.onInstalled.addListener(async () => {
   void refreshBadge();
 });
 
+let pushTimer: ReturnType<typeof setTimeout> | undefined;
+
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && (changes[STORAGE_KEYS.settings] || changes[STORAGE_KEYS.rules])) {
-    void refreshBadge();
+  if (area === 'sync') {
+    // Someone else's device edited something; land it in local and everything
+    // downstream re-hydrates through its existing local listener.
+    void pullFromSync();
+    return;
+  }
+  if (area !== 'local') return;
+
+  if (changes[STORAGE_KEYS.settings] || changes[STORAGE_KEYS.rules]) void refreshBadge();
+
+  if (changes[STORAGE_KEYS.settings] || changes[STORAGE_KEYS.rules] || changes[STORAGE_KEYS.profiles]) {
+    // Coalesce the storm of writes the panel makes while the user types.
+    if (pushTimer !== undefined) clearTimeout(pushTimer);
+    pushTimer = setTimeout(() => {
+      pushTimer = undefined;
+      void pushToSync();
+    }, 1500);
   }
 });
 

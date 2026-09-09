@@ -17,7 +17,8 @@ export interface RecordedField {
 export type AgentCommand =
   | { kind: 'fill'; fields: ResolvedFillField[] }
   | { kind: 'record'; includeSecrets: boolean }
-  | { kind: 'pick' };
+  /** `sessionId` scopes the cancel broadcast to this picking session. */
+  | { kind: 'pick'; sessionId: string };
 
 export type AgentResult =
   | { kind: 'fill'; filled: string[]; misses: string[] }
@@ -337,10 +338,15 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
       /**
        * Every frame runs its own picker, but only one is clicked. Without this
        * the others never settle, and executeScript waits for all of them.
+       *
+       * The session id matters: a cancel broadcast from a previous pick can
+       * still be in flight when the next one starts, and would otherwise kill
+       * it the moment it opened.
        */
       const onMessage = (event: MessageEvent): void => {
-        const data = event.data as { __devToolPick?: string } | null;
+        const data = event.data as { __devToolPick?: string; session?: string } | null;
         if (!data || data.__devToolPick !== 'cancel') return;
+        if (data.session !== command.sessionId) return;
         relayDown();
         finish({ kind: 'pick', selectors: null });
       };
@@ -348,7 +354,10 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
       const relayDown = (): void => {
         for (let index = 0; index < window.frames.length; index += 1) {
           try {
-            window.frames[index].postMessage({ __devToolPick: 'cancel' }, '*');
+            window.frames[index].postMessage(
+              { __devToolPick: 'cancel', session: command.sessionId },
+              '*',
+            );
           } catch {
             // Cross-origin frames still accept a '*' post; anything else is not ours.
           }
@@ -357,7 +366,7 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
 
       const cancelEverywhere = (): void => {
         try {
-          window.top?.postMessage({ __devToolPick: 'cancel' }, '*');
+          window.top?.postMessage({ __devToolPick: 'cancel', session: command.sessionId }, '*');
         } catch {
           // No parent access: the local relay below still covers our children.
         }
@@ -368,6 +377,7 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        delete (window as unknown as Record<string, unknown>).__DEV_TOOL_PICKING__;
         host.remove();
         window.removeEventListener('mousemove', onMove, true);
         window.removeEventListener('click', onClick, true);
@@ -379,6 +389,8 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
       // Backstop: never leave a frame's promise pending forever.
       const timer = setTimeout(() => finish({ kind: 'pick', selectors: null }), 60_000);
 
+      // Observable marker: the picker is only live once its listeners are attached.
+      (window as unknown as Record<string, unknown>).__DEV_TOOL_PICKING__ = true;
       window.addEventListener('mousemove', onMove, true);
       window.addEventListener('click', onClick, true);
       window.addEventListener('keydown', onKey, true);
