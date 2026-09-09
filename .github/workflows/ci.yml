@@ -29,6 +29,10 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Catches stories that compile but blow up on render, which typecheck cannot see.
+      - name: Build Storybook
+        run: npm run build-storybook -- --quiet
+
       # Playwright is deliberately not a devDependency, so a plain install stays
       # lean; CI adds it without touching the lockfile.
       - name: Install Playwright Chromium
