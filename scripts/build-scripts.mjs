@@ -17,7 +17,7 @@ const options = {
     'interceptor.main': 'src/content/interceptor.main.ts',
     // Not loaded by the extension: the panel imports the module directly. This
     // build exists so the e2e suite can drive the very same agent.
-    formAgent: 'src/panel/inject/formAgent.ts',
+    formAgent: 'src/inject/formAgent.ts',
   },
   outdir: 'dist',
   bundle: true,

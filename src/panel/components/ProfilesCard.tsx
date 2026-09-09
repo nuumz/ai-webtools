@@ -34,6 +34,9 @@ interface Props {
   onDuplicate: () => void;
   onDelete: () => void;
   onFill: () => void;
+  onRecord: () => void;
+  /** Picks an element on the page; without a field id the result becomes a new field. */
+  onPick: (fieldId?: string) => void;
 }
 
 export default function ProfilesCard({
@@ -47,6 +50,8 @@ export default function ProfilesCard({
   onDuplicate,
   onDelete,
   onFill,
+  onRecord,
+  onPick,
 }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const active = profiles.find((profile) => profile.id === activeId);
@@ -82,6 +87,9 @@ export default function ProfilesCard({
               </option>
             ))}
           </select>
+          <button onClick={onRecord} className="text-xs text-slate-600 hover:underline" title="Record the filled form">
+            ⤓
+          </button>
           <button onClick={onCreate} className="text-xs text-slate-600 hover:underline" title="New profile">
             ＋
           </button>
@@ -219,16 +227,21 @@ export default function ProfilesCard({
                         </button>
                       </div>
                     ))}
-                    <button
-                      className="text-[11px] text-slate-600 hover:underline"
-                      onClick={() =>
-                        updateField(field.id, {
-                          selectors: [...field.selectors, { strategy: 'css', value: '' }],
-                        })
-                      }
-                    >
-                      + fallback selector
-                    </button>
+                    <div className="flex gap-3">
+                      <button
+                        className="text-[11px] text-slate-600 hover:underline"
+                        onClick={() =>
+                          updateField(field.id, {
+                            selectors: [...field.selectors, { strategy: 'css', value: '' }],
+                          })
+                        }
+                      >
+                        + fallback selector
+                      </button>
+                      <button className="text-[11px] text-blue-600 hover:underline" onClick={() => onPick(field.id)}>
+                        ◎ pick from page
+                      </button>
+                    </div>
 
                     <div className="flex flex-wrap items-center gap-3 pt-1 border-t border-gray-200">
                       <label className="flex items-center gap-1 text-[11px] text-gray-600">
@@ -280,6 +293,12 @@ export default function ProfilesCard({
               onClick={() => onChange({ ...active, fields: [...active.fields, newField()] })}
             >
               + Add field
+            </button>
+            <button
+              className="text-xs border border-dashed border-blue-300 rounded py-1.5 px-3 text-blue-600 hover:bg-blue-50"
+              onClick={() => onPick()}
+            >
+              ◎ Pick
             </button>
             <button
               onClick={onFill}

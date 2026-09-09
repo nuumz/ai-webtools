@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import RuleForm, { type RuleDraft } from './components/RuleForm';
 import RuleList from './components/RuleList';
 import ProfilesCard from './components/ProfilesCard';
+import RecordedFieldsDialog from './components/RecordedFieldsDialog';
 import NetworkLogCard from './components/NetworkLogCard';
 import StoriesCard from './components/StoriesCard';
 import { useNetworkLog } from './hooks/useNetworkLog';
@@ -21,9 +22,14 @@ import {
   saveStoryEntries,
   normalizeSettings,
 } from '../shared/storage';
-import { newProfile, type FormProfile } from '../shared/form';
+import {
+  newProfile,
+  recordedToField,
+  type FormProfile,
+  type RecordedFieldInput,
+} from '../shared/form';
 import { resolveProfile } from '../shared/resolveProfile';
-import { activeTabId, runFill } from './inject/run';
+import { activeTab, runFill, runPick, runRecord } from '../inject/run';
 import { collectGarbage, putBody } from '../shared/bodyStore';
 import {
   addEntry,
@@ -50,6 +56,8 @@ export default function SidePanel() {
   const [editing, setEditing] = useState<MutationRule | undefined>(undefined);
   const [draft, setDraft] = useState<RuleDraft | undefined>(undefined);
   const [toast, setToast] = useState<string | null>(null);
+  const [recorded, setRecorded] = useState<RecordedFieldInput[] | null>(null);
+  const [includeSecrets, setIncludeSecrets] = useState(false);
   const log = useNetworkLog();
 
   useEffect(() => {
@@ -198,17 +206,18 @@ export default function SidePanel() {
   const fillForm = async () => {
     if (!activeProfile) return;
     try {
-      const tabId = await activeTabId();
-      if (tabId === undefined) return;
+      const tab = await activeTab();
+      if (tab?.id === undefined) return;
 
       const resolved = resolveProfile(activeProfile, { counters });
       if (resolved.errors.length > 0) {
         showToast(resolved.errors[0]);
         return;
       }
-      const outcome = await runFill(tabId, resolved.fields);
+      const outcome = await runFill(tab.id, resolved.fields);
       setCounters(resolved.counters);
       void saveCounters(resolved.counters);
+      rememberProfileForTab(tab.url, activeProfile.id);
 
       showToast(
         outcome.misses.length > 0
@@ -219,6 +228,83 @@ export default function SidePanel() {
       console.error('[Panel] Fill failed:', err);
       showToast('Fill failed — see console');
     }
+  };
+
+  /** Lets the keyboard shortcut fill with whatever was last used on this site. */
+  const rememberProfileForTab = (url: string | undefined, id: string) => {
+    if (!url) return;
+    try {
+      const origin = new URL(url).origin;
+      if (settings.lastProfileByOrigin[origin] === id) return;
+      persistSettings({
+        ...settings,
+        lastProfileByOrigin: { ...settings.lastProfileByOrigin, [origin]: id },
+      });
+    } catch {
+      // Not a normal page (chrome://, about:blank): nothing worth remembering.
+    }
+  };
+
+  const pickField = async (fieldId?: string) => {
+    if (!activeProfile) return;
+    try {
+      const tab = await activeTab();
+      if (tab?.id === undefined) return;
+      showToast('Click a field on the page…');
+
+      const picked = await runPick(tab.id);
+      if (!picked) {
+        showToast('Picking cancelled');
+        return;
+      }
+
+      if (fieldId) {
+        updateProfile({
+          ...activeProfile,
+          fields: activeProfile.fields.map((field) =>
+            field.id === fieldId ? { ...field, selectors: picked.selectors } : field,
+          ),
+        });
+        showToast('Selector updated');
+        return;
+      }
+
+      const field = recordedToField(
+        { selectors: picked.selectors, value: picked.value ?? '', label: picked.label },
+        activeProfile.fields.map((item) => item.key),
+      );
+      updateProfile({ ...activeProfile, fields: [...activeProfile.fields, field] });
+      showToast(`Added “${field.key}”`);
+    } catch (err) {
+      console.error('[Panel] Pick failed:', err);
+      showToast('Pick failed — see console');
+    }
+  };
+
+  const recordForm = async (secrets = includeSecrets) => {
+    if (!activeProfile) return;
+    try {
+      const tab = await activeTab();
+      if (tab?.id === undefined) return;
+      setIncludeSecrets(secrets);
+      setRecorded(await runRecord(tab.id, secrets));
+    } catch (err) {
+      console.error('[Panel] Record failed:', err);
+      showToast('Record failed — see console');
+    }
+  };
+
+  const addRecordedFields = (selected: RecordedFieldInput[]) => {
+    if (!activeProfile) return;
+    const keys = activeProfile.fields.map((field) => field.key);
+    const added = selected.map((entry) => {
+      const field = recordedToField(entry, keys);
+      keys.push(field.key);
+      return field;
+    });
+    updateProfile({ ...activeProfile, fields: [...activeProfile.fields, ...added] });
+    setRecorded(null);
+    showToast(`Added ${added.length} field(s)`);
   };
 
   const updateProfile = (next: FormProfile) =>
@@ -315,6 +401,8 @@ export default function SidePanel() {
           onDuplicate={duplicateProfile}
           onDelete={deleteProfile}
           onFill={() => void fillForm()}
+          onRecord={() => void recordForm()}
+          onPick={(fieldId) => void pickField(fieldId)}
         />
 
         <h2 className="font-semibold text-gray-700 mb-3">
@@ -322,6 +410,16 @@ export default function SidePanel() {
         </h2>
         <RuleList rules={rules} onToggle={toggleRule} onDelete={deleteRule} onEdit={setEditing} />
       </main>
+
+      {recorded && (
+        <RecordedFieldsDialog
+          fields={recorded}
+          includeSecrets={includeSecrets}
+          onToggleSecrets={(include) => void recordForm(include)}
+          onAdd={addRecordedFields}
+          onCancel={() => setRecorded(null)}
+        />
+      )}
 
       {toast && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-xs px-3 py-2 rounded-md shadow-lg">

@@ -32,7 +32,7 @@ Full stubbing is still available when you want the network out of the picture en
 | File | World | Responsibility |
 | --- | --- | --- |
 | `src/panel/*` | Extension page | React UI: network log, rule CRUD, form profiles |
-| `src/panel/inject/formAgent.ts` | Injected into the page | Fills and records forms across frames and shadow roots |
+| `src/inject/formAgent.ts` | Injected into the page | Fills, records and picks fields across frames and shadow roots |
 | `src/background/index.ts` | Service worker | Opens the panel, seeds storage, drives the toolbar badge |
 | `src/background/router.ts` | Service worker | Port registry: page capture in, panel updates out |
 | `src/background/logStore.ts` | Service worker | Per-tab ring buffer of captured exchanges |
@@ -155,6 +155,20 @@ work.
 exactly one visible, enabled element wins. Add fallbacks for inputs whose id changes
 between renders.
 
+You do not have to type any of that:
+
+- **◎ Pick** highlights elements as you move over the page; click one and its selector
+  chain (plus its current value) lands in the profile. Works inside iframes and open
+  shadow roots; Esc cancels. Picking from a field's own row replaces just that field's
+  selectors.
+- **⤓ Record** reads every filled-in field on the page and offers them as a checklist —
+  fill a form by hand once, then keep the fields you want. Passwords are left out unless
+  you tick *include passwords*.
+- **`Alt+Shift+F`** fills without opening the panel at all. It uses the profile you last
+  filled with on that origin, else one whose site scope matches, else the only profile you
+  have; the toolbar badge flashes how many fields it filled. Rebind it under
+  `chrome://extensions/shortcuts`.
+
 Values are written through the native `HTMLInputElement.prototype.value` setter followed
 by `input`/`change`, so React and Vue value trackers see the change instead of reverting
 it. `<select>` accepts an option's value *or* its visible text; checkboxes take
@@ -183,7 +197,7 @@ Other scripts:
 npm run dev            # Vite dev server for the panel UI alone
 npm run watch:scripts  # rebuild worker/content scripts on change
 npm run typecheck
-npm run test:unit      # vitest: expression language + profile resolution
+npm run test:unit      # vitest: expression language, profile resolution, profile picking
 npm run test:e2e       # rule engine, capture, story and form suites (headless)
 npm run test:ext       # loads dist/ as a real extension; needs a display: xvfb-run -a npm run test:ext
 ```
@@ -213,8 +227,9 @@ scripts cannot be ES modules.
 - Story replay serves the recorded body verbatim; it does not re-run any backend logic, so
   a recorded response can drift from what the API would say today.
 - A field's frame pattern is a plain substring of the frame URL, not a glob.
-- The element picker, record-this-form and the keyboard shortcut are not wired up yet; the
-  agent already supports recording, the UI for it comes next.
+- The picker runs in every frame at once; the frame you click cancels the others through a
+  `postMessage` relay, with a 60-second backstop so nothing can hang.
+- Picking cannot reach into a closed shadow root — nothing outside the component can.
 - While recording, every tab holds a port open, which keeps the service worker alive by
   design. Turn recording off when you are done.
 - Rules are stored in `chrome.storage.local` and apply to every frame of every site

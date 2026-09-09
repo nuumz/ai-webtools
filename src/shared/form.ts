@@ -3,6 +3,7 @@
  * derive values from each other.
  */
 import { randomId } from './ids';
+import { compilePattern } from './match';
 import type { FormFillField } from './types';
 
 /** Ordered by how well each survives a re-render, best first. */
@@ -97,4 +98,67 @@ export function describeSelector(selectors: FieldSelector[]): string {
   const first = selectors.find((selector) => selector.value.trim().length > 0);
   if (!first) return 'no selector';
   return first.strategy === 'css' ? first.value : `${first.strategy}=${first.value}`;
+}
+
+/** A field key that is safe to reference from an expression and not already taken. */
+export function uniqueKey(base: string, existing: Iterable<string>): string {
+  const taken = new Set(existing);
+  const words = base.trim().split(/[^A-Za-z0-9]+/).filter(Boolean);
+  const camel = words
+    .map((word, index) => (index === 0 ? word.toLowerCase() : word[0].toUpperCase() + word.slice(1).toLowerCase()))
+    .join('');
+  const cleaned = camel.replace(/^[0-9]+/, '') || 'field';
+
+  if (!taken.has(cleaned)) return cleaned;
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${cleaned}${suffix}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+export interface RecordedFieldInput {
+  selectors: FieldSelector[];
+  value: string;
+  label?: string;
+}
+
+export function recordedToField(recorded: RecordedFieldInput, existingKeys: Iterable<string>): ProfileField {
+  const base = recorded.label ?? recorded.selectors[0]?.value ?? 'field';
+  return {
+    ...newField(uniqueKey(base, existingKeys)),
+    label: recorded.label,
+    selectors: recorded.selectors,
+    source: { kind: 'literal', value: recorded.value },
+  };
+}
+
+/**
+ * Which profile a keyboard shortcut should use, in order: the one last used on
+ * this origin, then one scoped to the URL, then the only profile there is.
+ */
+export function pickProfileForUrl(
+  profiles: FormProfile[],
+  url: string | undefined,
+  lastByOrigin: Record<string, string> = {},
+): FormProfile | undefined {
+  if (profiles.length === 0) return undefined;
+
+  let origin = '';
+  try {
+    if (url) origin = new URL(url).origin;
+  } catch {
+    origin = '';
+  }
+
+  const remembered = origin ? profiles.find((profile) => profile.id === lastByOrigin[origin]) : undefined;
+  if (remembered) return remembered;
+
+  if (url) {
+    const scoped = profiles.find(
+      (profile) => profile.siteScope?.trim() && compilePattern(profile.siteScope)(url),
+    );
+    if (scoped) return scoped;
+  }
+
+  return profiles.length === 1 ? profiles[0] : undefined;
 }

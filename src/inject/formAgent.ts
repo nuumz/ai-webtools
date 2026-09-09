@@ -6,7 +6,7 @@
  * its arguments and its own nested helpers. Type-only imports are erased by
  * TypeScript and are therefore safe.
  */
-import type { FieldSelector, ResolvedFillField } from '../../shared/form';
+import type { FieldSelector, ResolvedFillField } from '../shared/form';
 
 export interface RecordedField {
   selectors: FieldSelector[];
@@ -16,11 +16,14 @@ export interface RecordedField {
 
 export type AgentCommand =
   | { kind: 'fill'; fields: ResolvedFillField[] }
-  | { kind: 'record'; includeSecrets: boolean };
+  | { kind: 'record'; includeSecrets: boolean }
+  | { kind: 'pick' };
 
 export type AgentResult =
   | { kind: 'fill'; filled: string[]; misses: string[] }
-  | { kind: 'record'; fields: RecordedField[] };
+  | { kind: 'record'; fields: RecordedField[] }
+  /** `selectors: null` means the user cancelled, or another frame was picked. */
+  | { kind: 'pick'; selectors: FieldSelector[] | null; label?: string; value?: string };
 
 export async function formAgent(command: AgentCommand): Promise<AgentResult> {
   // ------------------------------------------------------------- DOM helpers
@@ -272,6 +275,115 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
     }
 
     return { kind: 'fill', filled, misses };
+  }
+
+  if (command.kind === 'pick') {
+    return await new Promise<AgentResult>((resolve) => {
+      let settled = false;
+
+      const host = document.createElement('div');
+      host.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647';
+      const shadow = host.attachShadow({ mode: 'closed' });
+
+      const box = document.createElement('div');
+      box.style.cssText =
+        'position:fixed;border:2px solid #4f46e5;background:rgba(79,70,229,.15);' +
+        'border-radius:3px;pointer-events:none';
+      const hint = document.createElement('div');
+      hint.textContent = 'Click a field · Esc to cancel';
+      hint.style.cssText =
+        'position:fixed;left:8px;bottom:8px;padding:6px 10px;border-radius:6px;' +
+        'background:#0f172a;color:#fff;font:12px system-ui;pointer-events:none';
+      shadow.append(box, hint);
+      (document.body ?? document.documentElement).append(host);
+
+      const targetOf = (event: Event): Element | null => {
+        const path = event.composedPath();
+        const first = path[0];
+        return first instanceof Element ? first : null;
+      };
+
+      const onMove = (event: MouseEvent): void => {
+        const element = targetOf(event);
+        if (!element) return;
+        const rect = element.getBoundingClientRect();
+        box.style.left = `${rect.left}px`;
+        box.style.top = `${rect.top}px`;
+        box.style.width = `${rect.width}px`;
+        box.style.height = `${rect.height}px`;
+      };
+
+      const onClick = (event: MouseEvent): void => {
+        event.preventDefault();
+        event.stopPropagation();
+        const element = targetOf(event);
+        if (!element) return;
+        cancelEverywhere();
+        finish({
+          kind: 'pick',
+          selectors: buildSelectors(element),
+          label: labelFor(element),
+          value: readValue(element),
+        });
+      };
+
+      const onKey = (event: KeyboardEvent): void => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        cancelEverywhere();
+        finish({ kind: 'pick', selectors: null });
+      };
+
+      /**
+       * Every frame runs its own picker, but only one is clicked. Without this
+       * the others never settle, and executeScript waits for all of them.
+       */
+      const onMessage = (event: MessageEvent): void => {
+        const data = event.data as { __devToolPick?: string } | null;
+        if (!data || data.__devToolPick !== 'cancel') return;
+        relayDown();
+        finish({ kind: 'pick', selectors: null });
+      };
+
+      const relayDown = (): void => {
+        for (let index = 0; index < window.frames.length; index += 1) {
+          try {
+            window.frames[index].postMessage({ __devToolPick: 'cancel' }, '*');
+          } catch {
+            // Cross-origin frames still accept a '*' post; anything else is not ours.
+          }
+        }
+      };
+
+      const cancelEverywhere = (): void => {
+        try {
+          window.top?.postMessage({ __devToolPick: 'cancel' }, '*');
+        } catch {
+          // No parent access: the local relay below still covers our children.
+        }
+        relayDown();
+      };
+
+      const finish = (result: AgentResult): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        host.remove();
+        window.removeEventListener('mousemove', onMove, true);
+        window.removeEventListener('click', onClick, true);
+        window.removeEventListener('keydown', onKey, true);
+        window.removeEventListener('message', onMessage);
+        resolve(result);
+      };
+
+      // Backstop: never leave a frame's promise pending forever.
+      const timer = setTimeout(() => finish({ kind: 'pick', selectors: null }), 60_000);
+
+      window.addEventListener('mousemove', onMove, true);
+      window.addEventListener('click', onClick, true);
+      window.addEventListener('keydown', onKey, true);
+      window.addEventListener('message', onMessage);
+    });
   }
 
   const recorded: RecordedField[] = [];

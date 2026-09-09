@@ -116,6 +116,40 @@ export default async function run() {
     'no password captured',
   );
 
+  // ------------------------------------------------------------------ picker
+
+  const pickTop = page.evaluate(() => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick' }));
+  await page.click('#email');
+  const picked = await pickTop;
+  t.check('picking returns a durable selector first', picked.selectors[0], {
+    strategy: 'testid',
+    value: 'email',
+  });
+  t.check('picking reports the current value', picked.value, 'qa+1@dev.local');
+  t.assert(
+    'the picked selector finds the same element again',
+    await page.evaluate(
+      (selectors) =>
+        document.querySelector(`[data-testid="${selectors[0].value}"]`) ===
+        document.querySelector('#email'),
+      picked.selectors,
+    ),
+    'selector did not round-trip',
+  );
+
+  const cancelled = page.evaluate(() => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick' }));
+  await page.keyboard.press('Escape');
+  t.check('Escape cancels the picker', (await cancelled).selectors, null);
+
+  // Every frame runs a picker, but only one gets clicked: the rest must cancel
+  // themselves, or executeScript would never settle.
+  const topPick = page.evaluate(() => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick' }));
+  const framePick = frame.evaluate(() => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick' }));
+  await frame.click('#childField');
+  const [topResult, framePicked] = await Promise.all([topPick, framePick]);
+  t.check('the clicked frame returns its selector', framePicked.selectors?.[0]?.value, 'childField');
+  t.check('other frames cancel instead of hanging', topResult.selectors, null);
+
   await browser.close();
   server.close();
   return t.failures;

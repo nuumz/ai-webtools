@@ -51,6 +51,10 @@ export function normalizeSettings(raw: unknown): Settings {
     enabled: partial.enabled ?? DEFAULT_SETTINGS.enabled,
     captureEnabled: partial.captureEnabled ?? DEFAULT_SETTINGS.captureEnabled,
     redactKeys: Array.isArray(partial.redactKeys) ? partial.redactKeys : DEFAULT_SETTINGS.redactKeys,
+    lastProfileByOrigin:
+      partial.lastProfileByOrigin && typeof partial.lastProfileByOrigin === 'object'
+        ? partial.lastProfileByOrigin
+        : {},
   };
 }
 
