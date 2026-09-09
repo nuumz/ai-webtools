@@ -1,0 +1,32 @@
+{
+  "name": "ai-webtools",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Edge/Chrome MV3 side panel extension for API mocking, dynamic request/response mutation and form auto-filling.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run typecheck && npm run build:panel && npm run build:scripts",
+    "build:panel": "vite build",
+    "build:scripts": "node scripts/build-scripts.mjs",
+    "watch:scripts": "node scripts/build-scripts.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "node tests/interceptor.e2e.mjs",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.13",
+    "@types/chrome": "^0.0.328",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "esbuild": "^0.25.9",
+    "tailwindcss": "^4.1.13",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5"
+  }
+}
