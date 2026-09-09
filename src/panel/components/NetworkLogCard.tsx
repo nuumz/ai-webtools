@@ -55,25 +55,22 @@ export default function NetworkLogCard({
   const visible = useMemo(() => {
     const needle = filter.trim().toLowerCase();
     const rows = needle ? log.entries.filter((e) => e.url.toLowerCase().includes(needle)) : log.entries;
-    // Newest first: the request you just triggered is the one you want.
     return [...rows].reverse();
   }, [log.entries, filter]);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col flex-1 min-h-0">
-      <div className="flex items-center justify-between p-3 border-b border-gray-200 gap-2">
-        <p className="text-[11px] text-gray-500">
+    <div className="panel-card flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
+        <p className="m-0 text-[11px] text-faint">
           {log.entries.length === 1 ? '1 request' : `${log.entries.length} requests`}
-          {log.dropped > 0 && <span className="text-amber-600"> · {log.dropped} dropped</span>}
+          {log.dropped > 0 && <span className="text-warn"> · {log.dropped} dropped</span>}
         </p>
         <div className="flex gap-1.5">
           <button
             onClick={onToggleCapture}
-            className={`text-xs px-2.5 py-1.5 rounded-md transition-colors ${
-              capturing ? 'bg-red-600 hover:bg-red-500 text-white' : 'bg-slate-800 hover:bg-slate-700 text-white'
-            }`}
+            className={`btn ${capturing ? 'btn-live' : 'btn-secondary'}`}
           >
-            {capturing ? '● Recording' : 'Record'}
+            {capturing ? 'Recording' : 'Record'}
           </button>
           {capturing && log.entries.length > 0 && (
             <button
@@ -81,28 +78,21 @@ export default function NetworkLogCard({
                 setSelecting((on) => !on);
                 setSelected([]);
               }}
-              className={`text-xs px-2.5 py-1.5 rounded-md border ${
-                selecting
-                  ? 'border-slate-800 bg-slate-100 text-slate-800'
-                  : 'border-gray-300 text-gray-600 hover:bg-gray-50'
-              }`}
+              className={`btn btn-ghost ${selecting ? 'is-on' : ''}`}
             >
               Select
             </button>
           )}
-          <button
-            onClick={log.clear}
-            className="text-xs px-2.5 py-1.5 rounded-md border border-gray-300 text-gray-600 hover:bg-gray-50"
-          >
+          <button onClick={log.clear} className="btn btn-ghost">
             Clear
           </button>
         </div>
       </div>
 
       {capturing && (
-        <div className="p-3 pb-0">
+        <div className="px-3 pt-2">
           <input
-            className="w-full border rounded p-1.5 text-xs"
+            className="field field-mono field-sm"
             placeholder="Filter by URL…"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
@@ -110,27 +100,24 @@ export default function NetworkLogCard({
         </div>
       )}
 
-      <div className="p-3 flex-1 min-h-0 flex flex-col">
+      <div className="flex min-h-0 flex-1 flex-col p-3">
         {!capturing ? (
-          <p className="text-xs text-gray-400 italic text-center py-4">
+          <p className="panel-empty">
             Recording is off — turn it on, then reload the page to see its traffic.
           </p>
         ) : visible.length === 0 ? (
-          <p className="text-xs text-gray-400 italic text-center py-4">
-            No requests yet on this tab.
-          </p>
+          <p className="panel-empty">No requests yet on this tab.</p>
         ) : (
-          <ul className="divide-y divide-gray-100 border border-gray-100 rounded flex-1 min-h-0 overflow-y-auto">
+          <ul className="min-h-0 flex-1 overflow-y-auto rounded-[var(--radius-md)] border border-line">
             {visible.map((exchange) => (
-              <li key={exchange.id}>
-                <div className="flex items-center gap-2 px-2 hover:bg-slate-50">
+              <li key={exchange.id} className="border-b border-line last:border-b-0">
+                <div className="flex items-center gap-2 px-2 hover:bg-raised/60">
                   {selecting && (
                     <input
                       type="checkbox"
                       className="shrink-0 disabled:opacity-30"
                       checked={selected.includes(exchange.id)}
                       onChange={() => toggleSelected(exchange.id)}
-                      // Saving a replayed response would record the mock as if it were real.
                       disabled={exchange.servedBy !== 'network'}
                       title={
                         exchange.servedBy === 'network'
@@ -141,20 +128,24 @@ export default function NetworkLogCard({
                   )}
                   <button
                     onClick={() => setExpandedId(expandedId === exchange.id ? null : exchange.id)}
-                    className="flex-1 min-w-0 py-1.5 text-left"
+                    className="min-w-0 flex-1 py-1.5 text-left"
                   >
                     <span className="flex items-center gap-2">
-                      <span className="text-[10px] font-bold text-slate-500 w-9 shrink-0">{exchange.method}</span>
-                      <span className={`text-[10px] font-bold w-8 shrink-0 ${statusColor(exchange)}`}>
+                      <span className="w-9 shrink-0 font-mono text-[10px] font-semibold tabular-nums text-mute">
+                        {exchange.method}
+                      </span>
+                      <span
+                        className={`w-8 shrink-0 font-mono text-[10px] font-semibold tabular-nums ${statusColor(exchange)}`}
+                      >
                         {exchange.status || '—'}
                       </span>
-                      <span className="text-[11px] text-gray-700 truncate flex-1" title={exchange.url}>
+                      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink" title={exchange.url}>
                         {exchange.pathname}
-                        {exchange.search && <span className="text-gray-400">{exchange.search}</span>}
+                        {exchange.search && <span className="text-faint">{exchange.search}</span>}
                       </span>
                       {exchange.servedBy !== 'network' && <ServedByChip servedBy={exchange.servedBy} />}
                     </span>
-                    <span className="flex items-center gap-2 pl-[4.6rem] text-[10px] text-gray-400">
+                    <span className="flex items-center gap-2 pl-[4.6rem] font-mono text-[10px] tabular-nums text-faint">
                       <span>{exchange.durationMs} ms</span>
                       {exchange.resBytes > 0 && <span>· {formatBytes(exchange.resBytes)}</span>}
                       {exchange.transport === 'xhr' && <span>· XHR</span>}
@@ -175,14 +166,14 @@ export default function NetworkLogCard({
         )}
 
         {selecting && selected.length > 0 && (
-          <div className="mt-3 border-t border-gray-200 pt-3 flex flex-wrap items-center gap-2">
-            <span className="text-[11px] text-gray-600">{selected.length} selected →</span>
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
+            <span className="text-[11px] text-mute">{selected.length} selected →</span>
             <select
-              className="border rounded p-1 text-[11px]"
+              className="field field-sm !w-auto"
               value={target}
               onChange={(e) => setTarget(e.target.value)}
             >
-              <option value={NEW_STORY}>＋ New story</option>
+              <option value={NEW_STORY}>New story</option>
               {stories.map((story) => (
                 <option key={story.id} value={story.id}>
                   {story.name}
@@ -191,23 +182,16 @@ export default function NetworkLogCard({
             </select>
             {target === NEW_STORY && (
               <input
-                className="border rounded p-1 text-[11px] flex-1 min-w-[6rem]"
+                className="field field-sm min-w-[6rem] flex-1"
                 placeholder="Story name"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
               />
             )}
-            <button
-              onClick={save}
-              disabled={saving}
-              className="bg-slate-800 text-white rounded px-2.5 py-1 text-[11px] hover:bg-slate-700 disabled:opacity-50"
-            >
+            <button onClick={save} disabled={saving} className="btn btn-primary">
               {saving ? 'Saving…' : 'Save to story'}
             </button>
-            <button
-              onClick={() => setSelected([])}
-              className="text-[11px] text-gray-500 hover:underline"
-            >
+            <button onClick={() => setSelected([])} className="btn-link">
               Cancel
             </button>
           </div>
@@ -217,31 +201,21 @@ export default function NetworkLogCard({
   );
 }
 
-/**
- * Three different things happened to these responses, so they must not look
- * alike: replayed from a recording, faked outright, or real but altered.
- */
 function ServedByChip({ servedBy }: { servedBy: ExchangeMeta['servedBy'] }) {
   const styles: Record<string, string> = {
-    story: 'text-teal-700 bg-teal-50 border-teal-200',
-    stub: 'text-slate-700 bg-slate-100 border-slate-300',
-    mutated: 'text-violet-700 bg-violet-50 border-violet-200',
+    story: 'chip-ok',
+    stub: '',
+    mutated: 'chip-accent',
   };
-  return (
-    <span
-      className={`text-[9px] uppercase font-bold rounded border px-1 py-0.5 shrink-0 ${styles[servedBy] ?? styles.stub}`}
-    >
-      {servedBy}
-    </span>
-  );
+  return <span className={`chip shrink-0 ${styles[servedBy] ?? ''}`}>{servedBy}</span>;
 }
 
 function statusColor(exchange: ExchangeMeta): string {
-  if (exchange.outcome !== 'ok' || exchange.status === 0) return 'text-red-600';
-  if (exchange.status >= 500) return 'text-red-600';
-  if (exchange.status >= 400) return 'text-amber-600';
-  if (exchange.status >= 300) return 'text-slate-500';
-  return 'text-emerald-600';
+  if (exchange.outcome !== 'ok' || exchange.status === 0) return 'text-bad';
+  if (exchange.status >= 500) return 'text-bad';
+  if (exchange.status >= 400) return 'text-warn';
+  if (exchange.status >= 300) return 'text-faint';
+  return 'text-ok';
 }
 
 function formatBytes(bytes: number): string {

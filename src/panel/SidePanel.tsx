@@ -399,21 +399,25 @@ export default function SidePanel() {
   const activeStories = stories.filter((story) => story.isActive).length;
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50 text-sm font-sans">
-      <header className="bg-slate-900 text-white shadow-md shrink-0">
-        <div className="px-3 pt-2.5 pb-2 flex items-center gap-2">
-          <span className="font-bold text-sm shrink-0">Dev Interceptor</span>
-          <span className="text-[11px] text-slate-400 truncate flex-1" title={log.tabUrl}>
+    <div className="relative flex h-screen flex-col bg-canvas font-sans text-[13px] text-ink">
+      <header className="shrink-0 border-b border-line bg-surface">
+        <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">
+          <span className="shrink-0 text-[13px] font-semibold tracking-tight">Dev Interceptor</span>
+          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint" title={log.tabUrl}>
             {hostOf(log.tabUrl) ?? (log.connected ? 'waiting for the page…' : 'not connected')}
           </span>
           <button
+            onClick={fillForm}
+            disabled={!activeProfile}
+            className="btn btn-primary shrink-0"
+            title={activeProfile ? `Fill with ${activeProfile.name}` : 'No profile'}
+          >
+            Fill
+          </button>
+          <button
             onClick={() => persistSettings({ ...settings, enabled: !settings.enabled })}
             title={settings.enabled ? 'Interception is on' : 'Interception is off'}
-            className={`text-[11px] px-2 py-1 rounded-md shrink-0 transition-colors ${
-              settings.enabled
-                ? 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25'
-                : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-            }`}
+            className={`btn shrink-0 ${settings.enabled ? 'btn-secondary text-ok' : 'btn-ghost'}`}
           >
             {settings.enabled ? `On · ${activeCount}` : 'Off'}
           </button>
@@ -431,7 +435,7 @@ export default function SidePanel() {
         />
       </header>
 
-      <main className="p-4 flex-1 min-h-0 overflow-y-auto flex flex-col">
+      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
         {tab === 'network' && (
           <NetworkLogCard
             log={log}
@@ -462,6 +466,7 @@ export default function SidePanel() {
                 onSubmit={handleSubmit}
                 onCancel={() => {
                   setEditing(undefined);
+                  setDraft(undefined);
                   setRuleFormOpen(false);
                 }}
               />
@@ -471,15 +476,16 @@ export default function SidePanel() {
                   setEditing(undefined);
                   setRuleFormOpen(true);
                 }}
-                className="w-full mb-6 border border-dashed border-gray-300 rounded-lg py-2 text-xs text-gray-500 hover:bg-white"
+                className="btn btn-ghost mb-3 w-full !h-9 border-dashed"
               >
                 + New rule
               </button>
             )}
 
-            <h2 className="font-semibold text-gray-700 mb-3">
-              Rules <span className="text-gray-400 font-normal">({activeCount} active)</span>
-            </h2>
+            <div className="mb-2 flex items-baseline justify-between gap-2 px-0.5">
+              <h2 className="m-0 text-[13px] font-semibold">Rules</h2>
+              <span className="text-[11px] text-faint">{activeCount} active · {rules.length} total</span>
+            </div>
             <RuleList rules={rules} onToggle={toggleRule} onDelete={deleteRule} onEdit={editRule} />
           </>
         )}
@@ -526,7 +532,7 @@ export default function SidePanel() {
       )}
 
       {toast && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-xs px-3 py-2 rounded-md shadow-lg">
+        <div className="absolute bottom-4 left-1/2 z-20 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-[var(--radius-md)] border border-line-strong bg-raised px-3 py-2 text-[12px] text-ink shadow-[0_8px_24px_oklch(0%_0_0/0.4)]">
           {toast}
         </div>
       )}

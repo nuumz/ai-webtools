@@ -35,7 +35,6 @@ interface Props {
   onDelete: () => void;
   onFill: () => void;
   onRecord: () => void;
-  /** Picks an element on the page; without a field id the result becomes a new field. */
   onPick: (fieldId?: string) => void;
 }
 
@@ -71,12 +70,12 @@ export default function ProfilesCard({
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-6">
-      <div className="flex items-center justify-between mb-3 border-b pb-2 gap-2">
-        <h2 className="font-semibold text-gray-700 shrink-0">Form profiles</h2>
+    <div className="panel-card p-3.5">
+      <div className="mb-3 flex items-center justify-between gap-2 border-b border-line pb-2">
+        <h2 className="m-0 shrink-0 text-[13px] font-semibold">Form profiles</h2>
         <div className="flex items-center gap-1.5">
           <select
-            className="border rounded p-1 text-xs max-w-[9rem]"
+            className="field field-sm max-w-[9rem]"
             value={activeId ?? ''}
             onChange={(e) => onSelect(e.target.value)}
           >
@@ -87,19 +86,19 @@ export default function ProfilesCard({
               </option>
             ))}
           </select>
-          <button onClick={onRecord} className="text-xs text-slate-600 hover:underline" title="Record the filled form">
-            ⤓
+          <button onClick={onRecord} className="btn btn-ghost" title="Record the filled form">
+            Record
           </button>
-          <button onClick={onCreate} className="text-xs text-slate-600 hover:underline" title="New profile">
-            ＋
+          <button onClick={onCreate} className="btn btn-ghost" title="New profile">
+            New
           </button>
           {active && (
             <>
-              <button onClick={onDuplicate} className="text-xs text-slate-600 hover:underline" title="Duplicate">
-                ⧉
+              <button onClick={onDuplicate} className="btn btn-ghost" title="Duplicate">
+                Dup
               </button>
-              <button onClick={onDelete} className="text-xs text-red-600 hover:underline" title="Delete">
-                ✕
+              <button onClick={onDelete} className="btn btn-ghost btn-danger" title="Delete">
+                Del
               </button>
             </>
           )}
@@ -107,7 +106,7 @@ export default function ProfilesCard({
       </div>
 
       {!active ? (
-        <p className="text-xs text-gray-400 italic">
+        <p className="panel-empty">
           Create a profile to stop retyping the same form. Values can copy each other or be
           computed, so a signup form fills in one click.
         </p>
@@ -115,13 +114,13 @@ export default function ProfilesCard({
         <div className="space-y-3">
           <div className="flex gap-2">
             <input
-              className="border rounded p-1.5 text-xs flex-1 min-w-0"
+              className="field min-w-0 flex-1"
               value={active.name}
               onChange={(e) => onChange({ ...active, name: e.target.value })}
               placeholder="Profile name"
             />
             <input
-              className="border rounded p-1.5 font-mono text-[11px] flex-1 min-w-0"
+              className="field field-mono min-w-0 flex-1"
               value={active.siteScope ?? ''}
               onChange={(e) => onChange({ ...active, siteScope: e.target.value })}
               placeholder="site scope (optional)"
@@ -130,7 +129,7 @@ export default function ProfilesCard({
           </div>
 
           {errors.length > 0 && (
-            <ul className="text-[11px] text-red-600 list-disc pl-4">
+            <ul className="m-0 list-disc pl-4 text-[11px] text-bad">
               {errors.map((error) => (
                 <li key={error}>{error}</li>
               ))}
@@ -139,7 +138,7 @@ export default function ProfilesCard({
 
           <div className="space-y-1.5">
             {active.fields.map((field) => (
-              <div key={field.id} className="border border-gray-200 rounded">
+              <div key={field.id} className="overflow-hidden rounded-[var(--radius-md)] border border-line">
                 <div className="flex items-center gap-1.5 p-1.5">
                   <input
                     type="checkbox"
@@ -148,13 +147,13 @@ export default function ProfilesCard({
                     title="Include when filling"
                   />
                   <input
-                    className="border rounded p-1 text-[11px] w-24 shrink-0 font-mono"
+                    className="field field-mono field-sm w-24 shrink-0"
                     value={field.key}
                     onChange={(e) => updateField(field.id, { key: e.target.value })}
                     placeholder="key"
                   />
                   <select
-                    className="border rounded p-1 text-[11px] shrink-0"
+                    className="field field-sm w-auto shrink-0"
                     value={field.source.kind}
                     onChange={(e) =>
                       updateField(field.id, {
@@ -169,7 +168,7 @@ export default function ProfilesCard({
                     ))}
                   </select>
                   <input
-                    className="border rounded p-1 text-[11px] flex-1 min-w-0"
+                    className="field field-sm min-w-0 flex-1"
                     value={field.source.value}
                     onChange={(e) =>
                       updateField(field.id, { source: { kind: field.source.kind, value: e.target.value } })
@@ -178,7 +177,7 @@ export default function ProfilesCard({
                   />
                   <button
                     onClick={() => setExpandedId(expandedId === field.id ? null : field.id)}
-                    className="text-[11px] text-slate-500 shrink-0 px-1"
+                    className="btn-link shrink-0 px-1"
                     title="Selectors and follow-up"
                   >
                     {expandedId === field.id ? '▾' : '▸'}
@@ -186,18 +185,18 @@ export default function ProfilesCard({
                 </div>
 
                 {field.source.kind !== 'literal' && preview[field.key] !== undefined && (
-                  <p className="px-2 pb-1.5 text-[10px] text-gray-400 truncate">→ {preview[field.key]}</p>
+                  <p className="truncate px-2 pb-1.5 font-mono text-[10px] text-faint">→ {preview[field.key]}</p>
                 )}
 
                 {expandedId === field.id && (
-                  <div className="border-t border-gray-200 p-2 space-y-2 bg-slate-50">
-                    <p className="text-[10px] font-semibold text-gray-500">
+                  <div className="space-y-2 border-t border-line bg-inset p-2">
+                    <p className="m-0 text-[10px] font-semibold uppercase tracking-[0.06em] text-faint">
                       Selectors — tried in order, first unique match wins
                     </p>
                     {field.selectors.map((selector, index) => (
                       <div key={index} className="flex gap-1.5">
                         <select
-                          className="border rounded p-1 text-[11px]"
+                          className="field field-sm w-auto"
                           value={selector.strategy}
                           onChange={(e) =>
                             updateSelector(field, index, { strategy: e.target.value as FieldStrategy })
@@ -210,26 +209,26 @@ export default function ProfilesCard({
                           ))}
                         </select>
                         <input
-                          className="border rounded p-1 font-mono text-[11px] flex-1 min-w-0"
+                          className="field field-mono field-sm min-w-0 flex-1"
                           value={selector.value}
                           onChange={(e) => updateSelector(field, index, { value: e.target.value })}
                           placeholder={selector.strategy === 'css' ? '#email' : 'value'}
                         />
                         <button
-                          className="text-[11px] text-red-600 px-1"
+                          className="btn-link btn-danger px-1"
                           onClick={() =>
                             updateField(field.id, {
                               selectors: field.selectors.filter((_, i) => i !== index),
                             })
                           }
                         >
-                          ✕
+                          ×
                         </button>
                       </div>
                     ))}
                     <div className="flex gap-3">
                       <button
-                        className="text-[11px] text-slate-600 hover:underline"
+                        className="btn-link"
                         onClick={() =>
                           updateField(field.id, {
                             selectors: [...field.selectors, { strategy: 'css', value: '' }],
@@ -238,17 +237,17 @@ export default function ProfilesCard({
                       >
                         + fallback selector
                       </button>
-                      <button className="text-[11px] text-blue-600 hover:underline" onClick={() => onPick(field.id)}>
-                        ◎ pick from page
+                      <button className="btn-link" onClick={() => onPick(field.id)}>
+                        Pick from page
                       </button>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-3 pt-1 border-t border-gray-200">
-                      <label className="flex items-center gap-1 text-[11px] text-gray-600">
+                    <div className="flex flex-wrap items-center gap-3 border-t border-line pt-2">
+                      <label className="flex items-center gap-1 text-[11px] text-mute">
                         wait
                         <input
                           type="number"
-                          className="border rounded p-1 w-16 text-[11px]"
+                          className="field field-sm w-16"
                           value={field.after?.waitMs ?? ''}
                           onChange={(e) =>
                             updateField(field.id, {
@@ -258,22 +257,24 @@ export default function ProfilesCard({
                         />
                         ms after
                       </label>
-                      <label className="flex items-center gap-1 text-[11px] text-gray-600">
+                      <label className="flex items-center gap-1 text-[11px] text-mute">
                         <input
                           type="checkbox"
                           checked={field.after?.blur ?? false}
-                          onChange={(e) => updateField(field.id, { after: { ...field.after, blur: e.target.checked } })}
+                          onChange={(e) =>
+                            updateField(field.id, { after: { ...field.after, blur: e.target.checked } })
+                          }
                         />
                         blur
                       </label>
                       <input
-                        className="border rounded p-1 font-mono text-[11px] flex-1 min-w-[6rem]"
+                        className="field field-mono field-sm min-w-[6rem] flex-1"
                         value={field.framePattern ?? ''}
                         onChange={(e) => updateField(field.id, { framePattern: e.target.value || undefined })}
                         placeholder="frame URL contains…"
                       />
                       <button
-                        className="text-[11px] text-red-600 hover:underline"
+                        className="btn-link btn-danger"
                         onClick={() =>
                           onChange({ ...active, fields: active.fields.filter((item) => item.id !== field.id) })
                         }
@@ -289,21 +290,15 @@ export default function ProfilesCard({
 
           <div className="flex gap-2">
             <button
-              className="text-xs border border-dashed border-gray-300 rounded py-1.5 px-3 text-gray-500 hover:bg-gray-50"
+              className="btn btn-ghost"
               onClick={() => onChange({ ...active, fields: [...active.fields, newField()] })}
             >
               + Add field
             </button>
-            <button
-              className="text-xs border border-dashed border-blue-300 rounded py-1.5 px-3 text-blue-600 hover:bg-blue-50"
-              onClick={() => onPick()}
-            >
-              ◎ Pick
+            <button className="btn btn-ghost" onClick={() => onPick()}>
+              Pick
             </button>
-            <button
-              onClick={onFill}
-              className="flex-1 bg-blue-600 text-white rounded py-1.5 text-xs hover:bg-blue-500"
-            >
+            <button onClick={onFill} className="btn btn-primary flex-1">
               Fill form
             </button>
           </div>

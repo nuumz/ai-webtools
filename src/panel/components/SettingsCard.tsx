@@ -34,30 +34,21 @@ export default function SettingsCard({
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-6">
-      <div className="flex items-center justify-between mb-3 border-b pb-2">
-        <h2 className="font-semibold text-gray-700">Backup &amp; sync</h2>
-        <span className="text-[11px] text-gray-400">{formatBytes(usageBytes)} stored</span>
+    <div className="panel-card p-3.5">
+      <div className="mb-3 flex items-center justify-between border-b border-line pb-2">
+        <h2 className="m-0 text-[13px] font-semibold">Backup &amp; sync</h2>
+        <span className="font-mono text-[11px] tabular-nums text-faint">{formatBytes(usageBytes)} stored</span>
       </div>
 
       <div className="space-y-3">
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={onExport}
-            className="bg-slate-800 text-white rounded px-3 py-1.5 text-xs hover:bg-slate-700"
-          >
+        <div className="flex flex-wrap gap-1.5">
+          <button onClick={onExport} className="btn btn-primary">
             Export file
           </button>
-          <button
-            onClick={() => pickFile('merge')}
-            className="border border-slate-300 rounded px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
-          >
+          <button onClick={() => pickFile('merge')} className="btn btn-ghost">
             Import (merge)
           </button>
-          <button
-            onClick={() => pickFile('replace')}
-            className="border border-slate-300 rounded px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
-          >
+          <button onClick={() => pickFile('replace')} className="btn btn-ghost">
             Import (replace)
           </button>
           <input
@@ -72,11 +63,11 @@ export default function SettingsCard({
             }}
           />
         </div>
-        <p className="text-[11px] text-gray-400">
+        <p className="m-0 text-[11px] leading-relaxed text-faint">
           One self-contained file: rules, profiles and every story with its recorded bodies.
         </p>
 
-        <label className="flex items-center gap-2 text-xs text-gray-700 border-t pt-3">
+        <label className="flex items-center gap-2 border-t border-line pt-3 text-[12px] text-ink">
           <input
             type="checkbox"
             checked={settings.syncEnabled}
@@ -84,27 +75,21 @@ export default function SettingsCard({
           />
           Sync settings, rules and profiles through my browser account
         </label>
-        <p className="text-[11px] text-gray-400">
+        <p className="m-0 text-[11px] leading-relaxed text-faint">
           Stories and recorded bodies stay on this machine — the sync quota is 100 KB. Share those
           with the export file.
         </p>
-        {settings.syncStatus && <p className="text-[11px] text-amber-600">{settings.syncStatus}</p>}
+        {settings.syncStatus && <p className="m-0 text-[11px] text-warn">{settings.syncStatus}</p>}
 
-        <div className="flex flex-wrap gap-2 border-t pt-3">
-          <button
-            onClick={() => onTrim(TRIM_ABOVE_KB)}
-            className="border border-slate-300 rounded px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
-          >
+        <div className="flex flex-wrap gap-1.5 border-t border-line pt-3">
+          <button onClick={() => onTrim(TRIM_ABOVE_KB)} className="btn btn-ghost">
             Trim bodies over {TRIM_ABOVE_KB} KB
           </button>
-          <button
-            onClick={onCollectGarbage}
-            className="border border-slate-300 rounded px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
-          >
+          <button onClick={onCollectGarbage} className="btn btn-ghost">
             Delete unused bodies
           </button>
         </div>
-        {busy && <p className="text-[11px] text-slate-500">{busy}</p>}
+        {busy && <p className="m-0 text-[11px] text-mute">{busy}</p>}
       </div>
     </div>
   );

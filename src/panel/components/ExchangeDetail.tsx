@@ -20,8 +20,6 @@ export default function ExchangeDetail({ exchange, bodies, onLoadBody, onCreateR
     if (!bodies) onLoadBody(exchange.id);
   }, [bodies, exchange.id, onLoadBody]);
 
-  // A bare-text pattern would substring-match the whole URL, so always emit a
-  // pathname or a full URL — the latter when the query string is what differs.
   const urlPattern = matchQuery
     ? `${exchange.origin}${exchange.pathname}${exchange.search}`
     : exchange.pathname;
@@ -41,45 +39,39 @@ export default function ExchangeDetail({ exchange, bodies, onLoadBody, onCreateR
   });
 
   return (
-    <div className="border-t border-gray-200 bg-slate-50 p-3 space-y-3">
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-gray-500">
-        <span>{exchange.durationMs} ms</span>
-        <span>·</span>
+    <div className="space-y-3 border-t border-line bg-inset p-3">
+      <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-faint">
+        <span className="tabular-nums">{exchange.durationMs} ms</span>
+        <span aria-hidden>·</span>
         <span>{exchange.transport.toUpperCase()}</span>
-        <span>·</span>
+        <span aria-hidden>·</span>
         <span>{exchange.contentType || 'unknown type'}</span>
         {exchange.outcome !== 'ok' && (
-          <span className="text-red-600 font-semibold">{exchange.outcome}</span>
+          <span className="font-semibold text-bad">{exchange.outcome}</span>
         )}
       </div>
 
       <BodyBlock title="Request" body={bodies?.request} />
       <BodyBlock title="Response" body={bodies?.response} />
 
-      <label className="flex items-center gap-2 text-[11px] text-gray-600">
+      <label className="flex items-center gap-2 text-[11px] text-mute">
         <input type="checkbox" checked={matchQuery} onChange={(e) => setMatchQuery(e.target.checked)} />
         Match the query string too
       </label>
-      <code className="block text-[11px] text-gray-500 break-all">{urlPattern}</code>
+      <code className="block break-all font-mono text-[11px] text-faint">{urlPattern}</code>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-1.5">
         <button
           onClick={() => onCreateRule(draft('STUB'))}
-          className="bg-slate-800 text-white rounded px-2.5 py-1.5 text-xs hover:bg-slate-700"
+          className="btn btn-primary"
           disabled={bodies === undefined}
         >
           Stub this response
         </button>
-        <button
-          onClick={() => onCreateRule(draft('MUTATE_RESPONSE'))}
-          className="border border-slate-300 rounded px-2.5 py-1.5 text-xs text-slate-700 hover:bg-white"
-        >
+        <button onClick={() => onCreateRule(draft('MUTATE_RESPONSE'))} className="btn btn-ghost">
           Mutate response
         </button>
-        <button
-          onClick={() => onCreateRule(draft('MUTATE_REQUEST'))}
-          className="border border-slate-300 rounded px-2.5 py-1.5 text-xs text-slate-700 hover:bg-white"
-        >
+        <button onClick={() => onCreateRule(draft('MUTATE_REQUEST'))} className="btn btn-ghost">
           Mutate request
         </button>
       </div>
@@ -91,20 +83,20 @@ function BodyBlock({ title, body }: { title: string; body?: BodySnapshot }) {
   if (!body || !body.text) {
     return (
       <div>
-        <p className="text-[11px] font-semibold text-gray-500 mb-1">{title}</p>
-        <p className="text-[11px] text-gray-400 italic">no body captured</p>
+        <p className="mb-1 text-[11px] font-semibold text-mute">{title}</p>
+        <p className="m-0 text-[11px] italic text-faint">no body captured</p>
       </div>
     );
   }
   const parsed = parseJson(body.text);
   return (
     <div>
-      <p className="text-[11px] font-semibold text-gray-500 mb-1">
+      <p className="mb-1 text-[11px] font-semibold text-mute">
         {title}
-        {body.truncated && <span className="text-amber-600"> · truncated at 64 KB</span>}
-        {body.redacted && <span className="text-indigo-600"> · redacted</span>}
+        {body.truncated && <span className="text-warn"> · truncated at 64 KB</span>}
+        {body.redacted && <span className="text-accent"> · redacted</span>}
       </p>
-      <pre className="text-[11px] bg-white border border-gray-200 rounded p-2 overflow-x-auto max-h-40">
+      <pre className="code-block max-h-40">
         {parsed !== undefined ? JSON.stringify(parsed, null, 2) : body.text}
       </pre>
     </div>

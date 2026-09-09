@@ -12,17 +12,17 @@ export default function StoriesCard({ stories, onUpdate, onDelete }: Props) {
   const activeCount = stories.filter((story) => story.isActive).length;
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-6">
-      <div className="flex items-center justify-between mb-3 border-b pb-2">
-        <h2 className="font-semibold text-gray-700">Stories</h2>
-        <span className="text-[11px] text-gray-400">
+    <div className="panel-card mb-3 p-3.5">
+      <div className="mb-3 flex items-center justify-between border-b border-line pb-2">
+        <h2 className="m-0 text-[13px] font-semibold">Stories</h2>
+        <span className="text-[11px] text-faint">
           {stories.length === 0 ? 'none yet' : `${activeCount} of ${stories.length} playing`}
         </span>
       </div>
 
       {stories.length === 0 ? (
-        <p className="text-xs text-gray-400 italic">
-          Record some traffic, tick the rows you want, then “Save to story”. Replaying a story
+        <p className="panel-empty !py-3">
+          Record some traffic, Select the rows you want, then Save to story. Replaying a story
           serves those responses without touching the backend.
         </p>
       ) : (
@@ -30,7 +30,9 @@ export default function StoriesCard({ stories, onUpdate, onDelete }: Props) {
           {stories.map((story) => (
             <div
               key={story.id}
-              className={`border rounded-md ${story.isActive ? 'border-emerald-300 bg-emerald-50/40' : 'border-gray-200'}`}
+              className={`overflow-hidden rounded-[var(--radius-md)] border ${
+                story.isActive ? 'border-ok/40 bg-ok-soft' : 'border-line'
+              }`}
             >
               <div className="flex items-center gap-2 p-2">
                 <input
@@ -40,35 +42,37 @@ export default function StoriesCard({ stories, onUpdate, onDelete }: Props) {
                   title="Replay this story"
                 />
                 <input
-                  className="flex-1 min-w-0 bg-transparent text-xs font-semibold text-slate-800 focus:outline-none focus:bg-white focus:border rounded px-1 py-0.5"
+                  className="min-w-0 flex-1 rounded-[var(--radius-sm)] bg-transparent px-1 py-0.5 text-[12px] font-semibold text-ink focus:bg-inset focus:outline-none focus:ring-1 focus:ring-accent"
                   value={story.name}
                   onChange={(e) => onUpdate({ ...story, name: e.target.value })}
                 />
-                <span className="text-[10px] text-gray-400 shrink-0">{story.entryCount} entries</span>
+                <span className="shrink-0 font-mono text-[10px] tabular-nums text-faint">
+                  {story.entryCount} entries
+                </span>
                 <button
                   onClick={() => setExpandedId(expandedId === story.id ? null : story.id)}
-                  className="text-[11px] text-slate-500 hover:underline"
+                  className="btn-link"
                 >
                   {expandedId === story.id ? 'Hide' : 'Options'}
                 </button>
               </div>
 
               {expandedId === story.id && (
-                <div className="border-t border-gray-200 p-2 space-y-2 bg-white">
-                  <label className="flex items-center gap-2 text-[11px] text-gray-600">
+                <div className="space-y-2 border-t border-line bg-surface p-2.5">
+                  <label className="flex items-center gap-2 text-[11px] text-mute">
                     <span className="w-20 shrink-0">Match on</span>
                     <select
-                      className="border rounded p-1 text-[11px]"
+                      className="field field-sm !w-auto"
                       value={story.matchOn}
                       onChange={(e) => onUpdate({ ...story, matchOn: e.target.value as MatchOn })}
                     >
                       <option value="path+query">path + query string</option>
                       <option value="path">path only</option>
                     </select>
-                    <span className="text-gray-400">applies to newly saved entries</span>
+                    <span className="text-faint">applies to newly saved entries</span>
                   </label>
 
-                  <label className="flex items-center gap-2 text-[11px] text-gray-600">
+                  <label className="flex items-center gap-2 text-[11px] text-mute">
                     <input
                       type="checkbox"
                       checked={story.replayTiming}
@@ -77,7 +81,7 @@ export default function StoriesCard({ stories, onUpdate, onDelete }: Props) {
                     Replay the latency each response was recorded with
                   </label>
 
-                  <label className="flex items-center gap-2 text-[11px] text-gray-600">
+                  <label className="flex items-center gap-2 text-[11px] text-mute">
                     <input
                       type="checkbox"
                       checked={story.strict}
@@ -87,10 +91,10 @@ export default function StoriesCard({ stories, onUpdate, onDelete }: Props) {
                   </label>
 
                   {story.strict && (
-                    <label className="flex items-center gap-2 text-[11px] text-gray-600">
+                    <label className="flex items-center gap-2 text-[11px] text-mute">
                       <span className="w-20 shrink-0">Strict scope</span>
                       <input
-                        className="border rounded p-1 font-mono text-[11px] flex-1"
+                        className="field field-mono field-sm flex-1"
                         value={story.strictPattern}
                         placeholder={DEFAULT_STRICT_PATTERN}
                         onChange={(e) => onUpdate({ ...story, strictPattern: e.target.value })}
@@ -99,10 +103,7 @@ export default function StoriesCard({ stories, onUpdate, onDelete }: Props) {
                   )}
 
                   <div className="flex justify-end">
-                    <button
-                      onClick={() => onDelete(story.id)}
-                      className="text-[11px] text-red-600 hover:underline"
-                    >
+                    <button onClick={() => onDelete(story.id)} className="btn-link btn-danger">
                       Delete story
                     </button>
                   </div>

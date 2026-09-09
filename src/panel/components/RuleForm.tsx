@@ -109,15 +109,15 @@ export default function RuleForm({ editing, initialDraft, onSubmit, onCancel }: 
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-6">
-      <h2 className="font-semibold text-gray-700 mb-3 border-b pb-2">
-        {editing ? 'Edit Rule' : 'Add New Rule'}
+    <div className="panel-card mb-3 p-3.5">
+      <h2 className="mb-3 border-b border-line pb-2 text-[13px] font-semibold">
+        {editing ? 'Edit rule' : 'New rule'}
       </h2>
 
       <div className="space-y-3">
         <div className="flex gap-2">
           <select
-            className="border rounded p-2 bg-gray-50 text-gray-700 flex-1"
+            className="field flex-1"
             value={type}
             onChange={(e) => setType(e.target.value as RuleType)}
           >
@@ -128,7 +128,7 @@ export default function RuleForm({ editing, initialDraft, onSubmit, onCancel }: 
             ))}
           </select>
           <select
-            className="border rounded p-2 bg-gray-50 text-gray-700 w-24"
+            className="field w-24"
             value={method}
             onChange={(e) => setMethod(e.target.value as HttpMethod)}
           >
@@ -143,17 +143,17 @@ export default function RuleForm({ editing, initialDraft, onSubmit, onCancel }: 
         <input
           type="text"
           placeholder="/api/v1/users/* (supports URLPattern)"
-          className="w-full border rounded p-2 font-mono text-xs"
+          className="field field-mono"
           value={urlPattern}
           onChange={(e) => setUrlPattern(e.target.value)}
         />
 
         {type === 'STUB' && (
-          <label className="flex items-center gap-2 text-xs text-gray-500">
-            <span className="font-semibold">Status code</span>
+          <label className="flex items-center gap-2 text-[12px] text-mute">
+            <span className="font-medium">Status code</span>
             <input
               type="number"
-              className="border rounded p-1.5 w-24 font-mono"
+              className="field field-mono field-sm w-24"
               value={status}
               onChange={(e) => setStatus(e.target.value)}
             />
@@ -161,32 +161,29 @@ export default function RuleForm({ editing, initialDraft, onSubmit, onCancel }: 
         )}
 
         <div>
-          <label className="text-xs text-gray-500 font-semibold mb-1 block">
+          <label className="mb-1 block text-[11px] font-medium text-mute">
             {type === 'STUB' ? 'Payload (returned as-is)' : 'Payload (JSON to merge/override)'}
           </label>
           <textarea
-            className="w-full border rounded p-2 font-mono text-xs h-32 bg-slate-50"
+            className="field field-mono field-area"
             value={payloadJson}
             onChange={(e) => setPayloadJson(e.target.value)}
             spellCheck={false}
           />
         </div>
 
-        <button
-          onClick={() => setAdvanced((open) => !open)}
-          className="text-[11px] text-slate-600 hover:underline"
-        >
+        <button onClick={() => setAdvanced((open) => !open)} className="btn-link">
           {advanced ? '▾' : '▸'} Timing, failures and field edits
         </button>
 
         {advanced && (
-          <div className="space-y-2 border border-gray-200 rounded p-2 bg-slate-50">
-            <div className="flex flex-wrap items-center gap-2 text-[11px] text-gray-600">
+          <div className="space-y-2 rounded-[var(--radius-md)] border border-line bg-inset p-2.5">
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-mute">
               <label className="flex items-center gap-1">
                 delay
                 <input
                   type="number"
-                  className="border rounded p-1 w-20"
+                  className="field field-sm w-20"
                   value={delayMs}
                   onChange={(e) => setDelayMs(e.target.value)}
                   placeholder="0"
@@ -197,7 +194,7 @@ export default function RuleForm({ editing, initialDraft, onSubmit, onCancel }: 
                 ± jitter
                 <input
                   type="number"
-                  className="border rounded p-1 w-20"
+                  className="field field-sm w-20"
                   value={jitterMs}
                   onChange={(e) => setJitterMs(e.target.value)}
                   placeholder="0"
@@ -206,10 +203,10 @@ export default function RuleForm({ editing, initialDraft, onSubmit, onCancel }: 
               </label>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 text-[11px] text-gray-600">
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-mute">
               <span>fail with</span>
               <select
-                className="border rounded p-1"
+                className="field field-sm !w-auto"
                 value={faultKind}
                 onChange={(e) => setFaultKind(e.target.value as FaultKind)}
               >
@@ -221,7 +218,7 @@ export default function RuleForm({ editing, initialDraft, onSubmit, onCancel }: 
               {faultKind === 'status' && (
                 <input
                   type="number"
-                  className="border rounded p-1 w-20"
+                  className="field field-sm w-20"
                   value={faultStatus}
                   onChange={(e) => setFaultStatus(e.target.value)}
                 />
@@ -229,12 +226,12 @@ export default function RuleForm({ editing, initialDraft, onSubmit, onCancel }: 
             </div>
 
             <div>
-              <label className="text-[11px] text-gray-500 font-semibold mb-1 block">
+              <label className="mb-1 block text-[11px] font-medium text-faint">
                 Field edits — JSON array, e.g.{' '}
-                <code>[{'{'}"op":"set","path":"items[0].price","value":0{'}'}]</code>
+                <code className="font-mono">{`[{"op":"set","path":"items[0].price","value":0}]`}</code>
               </label>
               <textarea
-                className="w-full border rounded p-2 font-mono text-[11px] h-20 bg-white"
+                className="field field-mono field-area !min-h-[5rem]"
                 value={opsJson}
                 onChange={(e) => setOpsJson(e.target.value)}
                 spellCheck={false}
@@ -244,20 +241,14 @@ export default function RuleForm({ editing, initialDraft, onSubmit, onCancel }: 
           </div>
         )}
 
-        {error && <p className="text-xs text-red-600">{error}</p>}
+        {error && <p className="m-0 text-[12px] text-bad">{error}</p>}
 
         <div className="flex gap-2">
-          <button
-            onClick={handleSubmit}
-            className="flex-1 bg-slate-800 text-white rounded py-2 hover:bg-slate-700 font-medium transition"
-          >
-            {editing ? 'Update Rule' : 'Save Rule'}
+          <button onClick={handleSubmit} className="btn btn-primary flex-1 !h-9">
+            {editing ? 'Update rule' : 'Save rule'}
           </button>
-          {editing && onCancel && (
-            <button
-              onClick={onCancel}
-              className="px-4 border border-gray-300 rounded py-2 text-gray-600 hover:bg-gray-100 transition"
-            >
+          {onCancel && (
+            <button onClick={onCancel} className="btn btn-ghost !h-9">
               Cancel
             </button>
           )}
