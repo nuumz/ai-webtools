@@ -35,8 +35,10 @@ Full stubbing is still available when you want the network out of the picture en
 | `src/background/index.ts` | Service worker | Opens the panel, seeds storage, drives the toolbar badge |
 | `src/background/router.ts` | Service worker | Port registry: page capture in, panel updates out |
 | `src/background/logStore.ts` | Service worker | Per-tab ring buffer of captured exchanges |
-| `src/content/bridge.isolated.ts` | ISOLATED | Pushes config to the page, forwards capture to the worker |
+| `src/content/bridge.isolated.ts` | ISOLATED | Pushes config to the page, forwards capture, serves story bodies |
 | `src/content/interceptor.main.ts` | MAIN | Patches `window.fetch` and `XMLHttpRequest` |
+| `src/shared/story.ts` | Everywhere | Story/entry model, replay sequencing, exchange → entry |
+| `src/shared/bodyStore.ts` | Everywhere | Content-addressed body storage with garbage collection |
 | `src/shared/*` | Everywhere | Rule types, URL matching, deep merge, capture + redaction, storage |
 
 The ISOLATED bridge exists because a content script cannot patch the page's own `fetch`,
@@ -68,6 +70,29 @@ any field whose name matches the configurable key list (`password`, `token`, `se
 `citizenId`, `cardNo`, …). Masking happens in the page, before a record reaches the worker,
 so secrets never enter the log. Bodies are truncated at 64 KB and only text/JSON-ish
 content types are stored at all.
+
+## Stories
+
+A **story** is a set of real responses, captured once and replayed on demand. Tick the rows
+you want in the network log, pick *Save to story*, and the responses are stored under their
+own content hash. Activate the story and those endpoints answer from the recording — with
+the backend switched off entirely, if you like.
+
+- **Sequences come for free.** Save the same endpoint twice and the entries fold into a
+  sequence, so a polling endpoint replays `PENDING → RUNNING → DONE` in order. `cycle`
+  decides what happens after the last one: hold it (default), loop, or stop intercepting.
+- **Bodies load lazily.** Only matchers are pushed into the page; a body is fetched from
+  storage on first match and cached per frame, so a big story costs nothing until it is hit.
+- **Hand-written rules always win.** Story entries carry a lower priority, so a rule you
+  typed overrides the recording without editing it.
+- **Strict mode** (per story) answers `501` for requests the story does not cover, instead of
+  letting them reach the backend — scoped to a pattern (`/api/*` by default) so page assets
+  still load. Off by default: a miss falls through to the real backend.
+- Replayed traffic is tagged `STORY` in the log and skipped when saving, so a recording can
+  never capture itself.
+
+Stories and bodies live in `chrome.storage.local` (hence `unlimitedStorage`); deleting a
+story garbage-collects the bodies nothing else references.
 
 ## Rule types
 
@@ -121,7 +146,7 @@ Other scripts:
 npm run dev            # Vite dev server for the panel UI alone
 npm run watch:scripts  # rebuild worker/content scripts on change
 npm run typecheck
-npm run test:e2e       # rule engine + capture suites (headless)
+npm run test:e2e       # rule engine + capture + story suites (headless)
 npm run test:ext       # loads dist/ as a real extension; needs a display: xvfb-run -a npm run test:ext
 ```
 
@@ -143,6 +168,8 @@ scripts cannot be ES modules.
   is rewritten; mutated responses carry `x-intercepted` for easy spotting.
 - The log keeps 500 entries / 8 MB per tab and is cleared when the tab navigates or
   closes. Its metadata survives a service-worker restart; bodies do not.
+- Story replay serves the recorded body verbatim; it does not re-run any backend logic, so
+  a recorded response can drift from what the API would say today.
 - While recording, every tab holds a port open, which keeps the service worker alive by
   design. Turn recording off when you are done.
 - Rules are stored in `chrome.storage.local` and apply to every frame of every site

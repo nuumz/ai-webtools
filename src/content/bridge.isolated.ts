@@ -2,13 +2,18 @@
 // It pushes config down to the MAIN-world interceptor and forwards captured
 // traffic up to the service worker.
 import { normalizeSettings } from '../shared/storage';
+import { getBody } from '../shared/bodyStore';
 import { PORT_PAGE, type PageToBg } from '../shared/messages';
-import { ruleAppliesToOrigin } from '../shared/match';
+import { originMatches, ruleAppliesToOrigin } from '../shared/match';
+import { DEFAULT_STRICT_PATTERN, entryToRule, type StoryEntry, type StoryMeta } from '../shared/story';
 import {
+  BODY_REPLY_EVENT,
+  BODY_REQUEST_EVENT,
   CAPTURE_EVENT,
   REQUEST_EVENT,
   STORAGE_KEYS,
   SYNC_EVENT,
+  storyEntriesKey,
   type MutationRule,
   type PageConfig,
   type Settings,
@@ -26,16 +31,43 @@ let syncTimer: ReturnType<typeof setTimeout> | undefined;
 // ---------------------------------------------------------------- config push
 
 const readConfig = async (): Promise<PageConfig> => {
-  const stored = await chrome.storage.local.get([STORAGE_KEYS.rules, STORAGE_KEYS.settings]);
+  const stored = await chrome.storage.local.get([
+    STORAGE_KEYS.rules,
+    STORAGE_KEYS.settings,
+    STORAGE_KEYS.stories,
+  ]);
   const all: MutationRule[] = Array.isArray(stored[STORAGE_KEYS.rules])
     ? (stored[STORAGE_KEYS.rules] as MutationRule[])
     : [];
   settings = normalizeSettings(stored[STORAGE_KEYS.settings]);
+
+  const stories: StoryMeta[] = Array.isArray(stored[STORAGE_KEYS.stories])
+    ? (stored[STORAGE_KEYS.stories] as StoryMeta[])
+    : [];
+  const active = stories.filter(
+    (story) => story.isActive && originMatches(story.scopeOrigins, location.origin),
+  );
+
+  // Entries carry body *keys* only — the bodies are fetched on first match.
+  const storyRules: MutationRule[] = [];
+  if (active.length > 0) {
+    const entryStore = await chrome.storage.local.get(active.map((story) => storyEntriesKey(story.id)));
+    for (const story of active) {
+      const entries = entryStore[storyEntriesKey(story.id)];
+      if (!Array.isArray(entries)) continue;
+      for (const entry of entries as StoryEntry[]) storyRules.push(entryToRule(entry, story));
+    }
+  }
+
   return {
-    version: 2,
+    version: 3,
     settings,
     // Frames only ever need the rules that can match their own origin.
     rules: all.filter((rule) => ruleAppliesToOrigin(rule, location.origin)),
+    storyRules,
+    strictPatterns: active
+      .filter((story) => story.strict)
+      .map((story) => story.strictPattern || DEFAULT_STRICT_PATTERN),
   };
 };
 
@@ -147,6 +179,31 @@ window.addEventListener(CAPTURE_EVENT, ((event: CustomEvent<string>) => {
   }
 }) as EventListener);
 
+// ------------------------------------------------------- story body requests
+
+// Registered unconditionally: replay must work whether or not we are recording,
+// and reading storage here avoids holding a port open just to serve bodies.
+window.addEventListener(BODY_REQUEST_EVENT, ((event: CustomEvent<string>) => {
+  let requestId = '';
+  let bodyKey = '';
+  try {
+    ({ requestId, bodyKey } = JSON.parse(event.detail ?? '{}') as { requestId: string; bodyKey: string });
+  } catch {
+    return;
+  }
+  if (!requestId) return;
+
+  void getBody(bodyKey)
+    .catch(() => undefined)
+    .then((text) => {
+      window.dispatchEvent(
+        new CustomEvent(BODY_REPLY_EVENT, {
+          detail: JSON.stringify({ requestId, text: text ?? null }),
+        }),
+      );
+    });
+}) as EventListener);
+
 // ----------------------------------------------------------------- lifecycle
 
 // 1. The interceptor asks for config as soon as it boots (it may miss the first push).
@@ -161,5 +218,12 @@ void pushConfig();
 // 3. …and on every edit made in the Side Panel, so changes apply without a reload.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
-  if (changes[STORAGE_KEYS.rules] || changes[STORAGE_KEYS.settings]) schedulePush();
+  const touched = Object.keys(changes).some(
+    (key) =>
+      key === STORAGE_KEYS.rules ||
+      key === STORAGE_KEYS.settings ||
+      key === STORAGE_KEYS.stories ||
+      key.startsWith('story:'),
+  );
+  if (touched) schedulePush();
 });

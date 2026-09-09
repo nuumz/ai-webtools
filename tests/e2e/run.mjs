@@ -1,8 +1,9 @@
 // Runs every e2e suite and exits non-zero if any check failed.
 import mutation from './mutation.e2e.mjs';
 import capture from './capture.e2e.mjs';
+import story from './story.e2e.mjs';
 
-const suites = [mutation, capture];
+const suites = [mutation, capture, story];
 let failures = 0;
 for (const suite of suites) failures += await suite();
 

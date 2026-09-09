@@ -12,9 +12,13 @@ import {
   type Outcome,
   type ServedBy,
 } from '../shared/capture';
-import { compileRules, findRule, toAbsoluteUrl, type CompiledRule } from '../shared/match';
+import { compilePattern, compileRules, findRule, toAbsoluteUrl, type CompiledRule } from '../shared/match';
 import { mergeDeep } from '../shared/merge';
+import { randomId } from '../shared/ids';
+import { bodyKeyForHit } from '../shared/story';
 import {
+  BODY_REPLY_EVENT,
+  BODY_REQUEST_EVENT,
   CAPTURE_EVENT,
   DEFAULT_SETTINGS,
   REQUEST_EVENT,
@@ -36,6 +40,11 @@ if (globalScope[INSTALL_FLAG]) {
 function install(): void {
   let settings: Settings = DEFAULT_SETTINGS;
   let activeRules: CompiledRule[] = [];
+  let strictMatchers: ((url: string) => boolean)[] = [];
+  /** How many times each story entry has answered in THIS frame. */
+  const hits = new Map<string, number>();
+  const bodyCache = new Map<string, string>();
+  const pendingBodies = new Map<string, (text: string | undefined) => void>();
 
   window.addEventListener(SYNC_EVENT, ((event: CustomEvent<string>) => {
     try {
@@ -45,11 +54,32 @@ function install(): void {
         ? { version: 2, settings: DEFAULT_SETTINGS, rules: parsed as MutationRule[] }
         : (parsed as PageConfig);
       settings = config.settings ?? DEFAULT_SETTINGS;
-      activeRules = compileRules(config.rules ?? []);
+      // Story entries are rule-shaped and carry a lower priority, so the sort
+      // inside compileRules is what makes hand-written rules win.
+      activeRules = compileRules([...(config.rules ?? []), ...(config.storyRules ?? [])]);
+      strictMatchers = (config.strictPatterns ?? []).map(compilePattern);
+      // Rules changed, so sequence positions no longer mean anything.
+      hits.clear();
     } catch (err) {
       console.error('[Interceptor] Could not read config:', err);
       settings = DEFAULT_SETTINGS;
       activeRules = [];
+      strictMatchers = [];
+    }
+  }) as EventListener);
+
+  window.addEventListener(BODY_REPLY_EVENT, ((event: CustomEvent<string>) => {
+    try {
+      const { requestId, text } = JSON.parse(event.detail ?? '{}') as {
+        requestId: string;
+        text: string | null;
+      };
+      const resolve = pendingBodies.get(requestId);
+      if (!resolve) return;
+      pendingBodies.delete(requestId);
+      resolve(typeof text === 'string' ? text : undefined);
+    } catch {
+      // Malformed reply: the pending request falls back to its timeout.
     }
   }) as EventListener);
 
@@ -95,7 +125,56 @@ function install(): void {
   const findMatch = (url: string, method: string): CompiledRule | undefined =>
     settings.enabled ? findRule(activeRules, url, method) : undefined;
 
-  const stubResponseBody = (rule: CompiledRule): string => JSON.stringify(rule.payload ?? {});
+  const BODY_TIMEOUT_MS = 3000;
+
+  /** Asks the ISOLATED bridge for a stored body; resolves undefined if it cannot be had. */
+  const fetchStoredBody = (bodyKey: string): Promise<string | undefined> => {
+    const cached = bodyCache.get(bodyKey);
+    if (cached !== undefined) return Promise.resolve(cached);
+
+    return new Promise<string | undefined>((resolve) => {
+      const requestId = randomId('bq_');
+      const timer = setTimeout(() => {
+        pendingBodies.delete(requestId);
+        resolve(undefined);
+      }, BODY_TIMEOUT_MS);
+
+      pendingBodies.set(requestId, (text) => {
+        clearTimeout(timer);
+        if (text !== undefined) bodyCache.set(bodyKey, text);
+        resolve(text);
+      });
+
+      window.dispatchEvent(
+        new CustomEvent(BODY_REQUEST_EVENT, { detail: JSON.stringify({ requestId, bodyKey }) }),
+      );
+    });
+  };
+
+  /**
+   * The body a stub should serve. Inline payloads resolve immediately; story
+   * entries walk their recorded sequence. `undefined` means "do not stub" — the
+   * caller falls through to the real network rather than inventing a response.
+   */
+  const resolveStubBody = async (rule: CompiledRule): Promise<string | undefined> => {
+    if (!rule.bodyKeys || rule.bodyKeys.length === 0) return JSON.stringify(rule.payload ?? {});
+
+    const seen = hits.get(rule.id) ?? 0;
+    const bodyKey = bodyKeyForHit(rule.bodyKeys, rule.cycle ?? 'stick-last', seen);
+    if (bodyKey === undefined) return undefined;
+
+    const text = await fetchStoredBody(bodyKey);
+    if (text === undefined) return undefined;
+    hits.set(rule.id, seen + 1);
+    return text;
+  };
+
+  /** A strict story answers 501 for anything it does not cover, instead of falling through. */
+  const isStrictMiss = (url: string): boolean =>
+    settings.enabled && strictMatchers.some((matches) => matches(url));
+
+  const strictBody = (url: string): string =>
+    JSON.stringify({ error: 'not-in-story', message: 'No story entry matches this request.', url });
 
   /** Applies the rule payload to a JSON string, returning null when it is not JSON. */
   const mutateJsonText = (raw: string, rule: CompiledRule): string | null => {
@@ -136,7 +215,7 @@ function install(): void {
     }
 
     // Nothing to do at all: hand straight to the network.
-    if (!rule && !capture) return nativeFetch(input, init);
+    if (!rule && !capture && !isStrictMiss(absoluteUrl)) return nativeFetch(input, init);
 
     const requestHeaders = capture ? readRequestHeaders(input, init) : undefined;
     let requestText = capture ? await readRequestBody(input, init) : undefined;
@@ -170,14 +249,33 @@ function install(): void {
 
     // --- Full stub: never touch the network.
     if (rule?.type === 'STUB') {
-      const body = stubResponseBody(rule);
-      log(`Stubbed ${absoluteUrl}`, rule.payload);
-      const stubbed = new Response(body, {
-        status: rule.status ?? 200,
-        headers: { 'Content-Type': 'application/json', 'X-Intercepted': 'STUB' },
+      const body = await resolveStubBody(rule);
+      if (body !== undefined) {
+        log(`${rule.storyId ? 'Replayed' : 'Stubbed'} ${absoluteUrl}`, rule.label ?? rule.payload);
+        const stubbed = new Response(body, {
+          status: rule.status ?? 200,
+          headers: {
+            'Content-Type': rule.contentType || 'application/json',
+            'X-Intercepted': rule.storyId ? 'STORY' : 'STUB',
+          },
+        });
+        finish(stubbed, 'stub', 'ok', body);
+        return stubbed;
+      }
+      // No body to serve (missing, or a `once` sequence ran out): behave as a miss.
+      rule = undefined;
+    }
+
+    // --- Strict story: a request it does not cover must not silently reach the backend.
+    if (!rule && isStrictMiss(absoluteUrl)) {
+      const body = strictBody(absoluteUrl);
+      log(`Strict miss ${absoluteUrl}`);
+      const refused = new Response(body, {
+        status: 501,
+        headers: { 'Content-Type': 'application/json', 'X-Intercepted': 'STRICT' },
       });
-      finish(stubbed, 'stub', 'ok', body);
-      return stubbed;
+      finish(refused, 'stub', 'ok', body);
+      return refused;
     }
 
     // --- Request mutation: rewrite the outgoing body, then hit the real backend.
@@ -272,9 +370,12 @@ function install(): void {
 
   interface StubState {
     status: number;
-    body: string;
+    /** Undefined until the story body arrives; `_deliverStub` fills it in. */
+    body?: string;
     readyState: number;
     aborted: boolean;
+    /** 'STRICT' responses are synthesised locally and need no lookup. */
+    resolved: boolean;
   }
 
   class MutatedXHR extends NativeXHR {
@@ -289,6 +390,7 @@ function install(): void {
     private _requestText?: string;
     private _requestHeaders: Record<string, string> = {};
     private _captureBound = false;
+    private _sendBody?: Document | XMLHttpRequestBodyInit | null;
 
     override open(
       method: string,
@@ -319,14 +421,29 @@ function install(): void {
       this._bindCapture();
 
       if (this._rule?.type === 'STUB') {
+        // `send` cannot be async, so the body is resolved inside the deferred
+        // delivery that already runs on a timer.
+        this._sendBody = body;
         this._stub = {
           status: this._rule.status ?? 200,
-          body: stubResponseBody(this._rule),
           readyState: MutatedXHR.OPENED,
           aborted: false,
+          resolved: false,
         };
-        log(`Stubbed ${this._url} (XHR)`, this._rule.payload);
-        setTimeout(() => this._deliverStub(), 0);
+        setTimeout(() => void this._deliverStub(), 0);
+        return;
+      }
+
+      if (!this._rule && isStrictMiss(this._url)) {
+        this._stub = {
+          status: 501,
+          body: strictBody(this._url),
+          readyState: MutatedXHR.OPENED,
+          aborted: false,
+          resolved: true,
+        };
+        log(`Strict miss ${this._url} (XHR)`);
+        setTimeout(() => void this._deliverStub(), 0);
         return;
       }
 
@@ -350,16 +467,27 @@ function install(): void {
       super.abort();
     }
 
+    private get _stubContentType(): string {
+      return this._rule?.contentType || 'application/json';
+    }
+
+    private get _stubMarker(): string {
+      if (this._stub?.status === 501 && !this._rule) return 'STRICT';
+      return this._rule?.storyId ? 'STORY' : 'STUB';
+    }
+
     override getAllResponseHeaders(): string {
-      if (this._stub) return 'content-type: application/json\r\nx-intercepted: STUB\r\n';
+      if (this._stub) {
+        return `content-type: ${this._stubContentType}\r\nx-intercepted: ${this._stubMarker}\r\n`;
+      }
       return super.getAllResponseHeaders();
     }
 
     override getResponseHeader(name: string): string | null {
       if (this._stub) {
         const lower = name.toLowerCase();
-        if (lower === 'content-type') return 'application/json';
-        if (lower === 'x-intercepted') return 'STUB';
+        if (lower === 'content-type') return this._stubContentType;
+        if (lower === 'x-intercepted') return this._stubMarker;
         return null;
       }
       return super.getResponseHeader(name);
@@ -384,7 +512,7 @@ function install(): void {
     }
 
     override get responseText(): string {
-      if (this._stub) return this._stub.readyState === MutatedXHR.DONE ? this._stub.body : '';
+      if (this._stub) return this._stub.readyState === MutatedXHR.DONE ? (this._stub.body ?? '') : '';
       const text = super.responseText;
       if (this._rule?.type !== 'MUTATE_RESPONSE' || !text) return text;
       return this._mutateCached(text, this._rule);
@@ -470,17 +598,33 @@ function install(): void {
       }
     }
 
-    private _deliverStub(): void {
+    private async _deliverStub(): Promise<void> {
       const stub = this._stub;
       if (!stub || stub.aborted) return;
 
+      if (!stub.resolved) {
+        const body = this._rule ? await resolveStubBody(this._rule) : undefined;
+        // `abort()` can land while the body is in flight.
+        if (stub.aborted || this._stub !== stub) return;
+        if (body === undefined) {
+          // Nothing to replay: drop the stub and run the real request instead.
+          this._stub = undefined;
+          super.send(this._sendBody);
+          return;
+        }
+        stub.body = body;
+        stub.resolved = true;
+        log(`${this._rule?.storyId ? 'Replayed' : 'Stubbed'} ${this._url} (XHR)`);
+      }
+
+      const body = stub.body ?? '';
       this.dispatchEvent(new ProgressEvent('loadstart'));
       for (const state of [MutatedXHR.HEADERS_RECEIVED, MutatedXHR.LOADING, MutatedXHR.DONE]) {
         if (stub.aborted) return;
         stub.readyState = state;
         this.dispatchEvent(new Event('readystatechange'));
       }
-      const total = stub.body.length;
+      const total = body.length;
       this.dispatchEvent(new ProgressEvent('progress', { lengthComputable: true, loaded: total, total }));
       this.dispatchEvent(new ProgressEvent('load', { lengthComputable: true, loaded: total, total }));
       this.dispatchEvent(new ProgressEvent('loadend', { lengthComputable: true, loaded: total, total }));

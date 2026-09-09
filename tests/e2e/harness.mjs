@@ -71,11 +71,13 @@ export async function startServer() {
 
 /**
  * Opens a page with the built MAIN-world bundle plus a stand-in for the
- * ISOLATED bridge, and a collector for the capture events it emits.
+ * ISOLATED bridge (config push, capture collection and story-body lookup), so
+ * suites exercise the real interceptor without loading the extension.
  */
-export async function openPage(browser, config) {
+export async function openPage(browser, config, { bodies = {} } = {}) {
   const page = await browser.newPage();
-  await page.addInitScript((json) => {
+  await page.addInitScript(([json, bodyJson]) => {
+    const storedBodies = JSON.parse(bodyJson);
     window.__captured = [];
     window.addEventListener('__DEV_TOOL_CAPTURE__', (event) => {
       try {
@@ -87,7 +89,15 @@ export async function openPage(browser, config) {
     window.addEventListener('__DEV_TOOL_REQUEST_RULES__', () => {
       window.dispatchEvent(new CustomEvent('__DEV_TOOL_SYNC_RULES__', { detail: json }));
     });
-  }, JSON.stringify(config));
+    window.addEventListener('__DEV_TOOL_BODY_REQUEST__', (event) => {
+      const { requestId, bodyKey } = JSON.parse(event.detail);
+      window.dispatchEvent(
+        new CustomEvent('__DEV_TOOL_BODY_REPLY__', {
+          detail: JSON.stringify({ requestId, text: storedBodies[bodyKey] ?? null }),
+        }),
+      );
+    });
+  }, [JSON.stringify(config), JSON.stringify(bodies)]);
   await page.addInitScript({ content: readFileSync('dist/interceptor.main.js', 'utf8') });
   return page;
 }

@@ -3,16 +3,31 @@ import RuleForm, { type RuleDraft } from './components/RuleForm';
 import RuleList from './components/RuleList';
 import AutoFillCard from './components/AutoFillCard';
 import NetworkLogCard from './components/NetworkLogCard';
+import StoriesCard from './components/StoriesCard';
 import { useNetworkLog } from './hooks/useNetworkLog';
 import {
   loadFormFillFields,
   loadRules,
   loadSettings,
+  loadStories,
+  loadStoryEntries,
+  removeStory,
   saveFormFillFields,
   saveRules,
   saveSettings,
+  saveStories,
+  saveStoryEntries,
   normalizeSettings,
 } from '../shared/storage';
+import { collectGarbage, putBody } from '../shared/bodyStore';
+import {
+  addEntry,
+  exchangeToEntry,
+  newStory,
+  referencedBodyKeys,
+  type StoryMeta,
+} from '../shared/story';
+import { randomId } from '../shared/ids';
 import {
   DEFAULT_SETTINGS,
   STORAGE_KEYS,
@@ -60,6 +75,7 @@ export default function SidePanel() {
   const [rules, setRules] = useState<MutationRule[]>([]);
   const [formFields, setFormFields] = useState<FormFillField[]>([]);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [stories, setStories] = useState<StoryMeta[]>([]);
   const [editing, setEditing] = useState<MutationRule | undefined>(undefined);
   const [draft, setDraft] = useState<RuleDraft | undefined>(undefined);
   const [toast, setToast] = useState<string | null>(null);
@@ -69,6 +85,7 @@ export default function SidePanel() {
     void loadRules().then(setRules);
     void loadFormFillFields().then(setFormFields);
     void loadSettings().then(setSettings);
+    void loadStories().then(setStories);
   }, []);
 
   // Keep the panel in sync if storage is changed elsewhere (another window, import…).
@@ -82,9 +99,11 @@ export default function SidePanel() {
       const ruleChange = changes[STORAGE_KEYS.rules];
       const fieldChange = changes[STORAGE_KEYS.formFill];
       const settingsChange = changes[STORAGE_KEYS.settings];
+      const storyChange = changes[STORAGE_KEYS.stories];
       if (ruleChange) setRules((ruleChange.newValue as MutationRule[]) ?? []);
       if (fieldChange) setFormFields((fieldChange.newValue as FormFillField[]) ?? []);
       if (settingsChange) setSettings(normalizeSettings(settingsChange.newValue));
+      if (storyChange) setStories((storyChange.newValue as StoryMeta[]) ?? []);
     };
     chrome.storage.onChanged.addListener(listener);
     return () => chrome.storage.onChanged.removeListener(listener);
@@ -105,13 +124,18 @@ export default function SidePanel() {
     void saveSettings(next);
   }, []);
 
+  const persistStories = useCallback((next: StoryMeta[]) => {
+    setStories(next);
+    void saveStories(next);
+  }, []);
+
   const handleSubmit = (submitted: RuleDraft) => {
     if (editing) {
       persistRules(rules.map((rule) => (rule.id === editing.id ? { ...rule, ...submitted } : rule)));
       setEditing(undefined);
       return;
     }
-    persistRules([...rules, { id: newRuleId(), isActive: true, ...submitted }]);
+    persistRules([...rules, { id: randomId('rl_'), isActive: true, ...submitted }]);
     setDraft(undefined);
   };
 
@@ -133,6 +157,61 @@ export default function SidePanel() {
     // A fresh object identity is what re-hydrates the form.
     setDraft({ ...fromExchange });
     showToast('Draft loaded below — review, then save');
+  };
+
+  /**
+   * Turns selected log rows into story entries. Bodies go to the content-addressed
+   * store, so re-recording the same response costs nothing and repeat captures of
+   * one endpoint become a replay sequence.
+   */
+  const saveToStory = async (exchangeIds: string[], target: { storyId?: string; name?: string }) => {
+    const existing = target.storyId ? stories.find((story) => story.id === target.storyId) : undefined;
+    const story = existing ?? newStory(target.name?.trim() || `Story ${stories.length + 1}`);
+
+    let entries = existing ? await loadStoryEntries(story.id) : [];
+    let saved = 0;
+    let skipped = 0;
+
+    for (const exchangeId of exchangeIds) {
+      const meta = log.entries.find((entry) => entry.id === exchangeId);
+      // Replayed traffic would record the mock as if it were real.
+      if (!meta || meta.servedBy !== 'network') {
+        skipped += 1;
+        continue;
+      }
+      const bodies = await log.fetchBody(exchangeId);
+      const text = bodies.response?.text;
+      if (!text) {
+        skipped += 1;
+        continue;
+      }
+      const bodyKey = await putBody(text);
+      entries = addEntry(entries, exchangeToEntry(meta, bodyKey, story.matchOn));
+      saved += 1;
+    }
+
+    await saveStoryEntries(story.id, entries);
+    const updated: StoryMeta = { ...story, entryCount: entries.length };
+    persistStories(
+      existing
+        ? stories.map((item) => (item.id === story.id ? updated : item))
+        : [...stories, updated],
+    );
+
+    showToast(
+      skipped > 0
+        ? `Saved ${saved} to “${story.name}” · skipped ${skipped}`
+        : `Saved ${saved} to “${story.name}”`,
+    );
+  };
+
+  const deleteStory = async (storyId: string) => {
+    const remaining = stories.filter((story) => story.id !== storyId);
+    persistStories(remaining);
+    await removeStory(storyId);
+    // Drop bodies nothing references any more.
+    const entryLists = await Promise.all(remaining.map((story) => loadStoryEntries(story.id)));
+    await collectGarbage(referencedBodyKeys(entryLists));
   };
 
   const injectFormFill = async () => {
@@ -188,10 +267,20 @@ export default function SidePanel() {
         <NetworkLogCard
           log={log}
           capturing={settings.captureEnabled}
+          stories={stories}
           onToggleCapture={() =>
             persistSettings({ ...settings, captureEnabled: !settings.captureEnabled })
           }
           onCreateRule={handleCreateRule}
+          onSaveToStory={saveToStory}
+        />
+
+        <StoriesCard
+          stories={stories}
+          onUpdate={(story) =>
+            persistStories(stories.map((item) => (item.id === story.id ? story : item)))
+          }
+          onDelete={(storyId) => void deleteStory(storyId)}
         />
 
         <RuleForm
@@ -215,11 +304,4 @@ export default function SidePanel() {
       )}
     </div>
   );
-}
-
-/** `crypto.randomUUID` is unavailable outside secure contexts. */
-function newRuleId(): string {
-  const uuid = globalThis.crypto?.randomUUID;
-  if (typeof uuid === 'function') return uuid.call(globalThis.crypto);
-  return `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
