@@ -12,6 +12,10 @@ export interface NetworkLogState {
   connected: boolean;
   tabId?: number;
   tabUrl?: string;
+  /** The panel was opened for one tab and stays with it, rather than following the active tab. */
+  pinned: boolean;
+  /** The pinned tab was closed: the log is still readable, but nothing can act on the page. */
+  tabClosed: boolean;
   entries: ExchangeMeta[];
   dropped: number;
   bodies: Record<string, ExchangeBodies>;
@@ -25,13 +29,28 @@ const NOT_FOUND: ExchangeBodies = { found: false };
 const BODY_TIMEOUT_MS = 3000;
 
 /**
+ * The service worker opens the panel as `index.html?tabId=<id>`, which is what
+ * makes the document per tab. Absent (dev server, manual open) the panel falls
+ * back to following the window's active tab.
+ */
+function readPinnedTabId(): number | undefined {
+  const raw = new URLSearchParams(window.location.search).get('tabId');
+  if (raw === null) return undefined;
+  const id = Number(raw);
+  return Number.isInteger(id) && id >= 0 ? id : undefined;
+}
+
+/**
  * Owns the panel's single port to the service worker: tab identity and the log
  * arrive on the same channel, so one connection serves both.
  */
 export function useNetworkLog(): NetworkLogState {
   const portRef = useRef<chrome.runtime.Port | null>(null);
   const [connected, setConnected] = useState(false);
-  const [tabId, setTabId] = useState<number | undefined>(undefined);
+  const [pinnedTabId] = useState(readPinnedTabId);
+  const [pinned, setPinned] = useState(pinnedTabId !== undefined);
+  const [tabClosed, setTabClosed] = useState(false);
+  const [tabId, setTabId] = useState<number | undefined>(pinnedTabId);
   const [tabUrl, setTabUrl] = useState<string | undefined>(undefined);
   const [entries, setEntries] = useState<ExchangeMeta[]>([]);
   const [dropped, setDropped] = useState(0);
@@ -56,6 +75,11 @@ export function useNetworkLog(): NetworkLogState {
         case 'tab/changed':
           setTabId(message.tabId);
           setTabUrl(message.url);
+          setPinned(message.pinned);
+          setTabClosed(false);
+          break;
+        case 'tab/closed':
+          setTabClosed(true);
           break;
         case 'log/reset':
           setEntries(message.entries);
@@ -90,12 +114,11 @@ export function useNetworkLog(): NetworkLogState {
       setConnected(false);
     });
 
-    void chrome.windows
-      ?.getCurrent()
-      .then((window) => {
-        if (window.id !== undefined) send(port, { kind: 'log/subscribe', windowId: window.id });
-      })
-      .catch(() => undefined);
+    if (pinnedTabId !== undefined) {
+      send(port, { kind: 'log/subscribe', tabId: pinnedTabId });
+    } else {
+      void subscribePanel(port);
+    }
 
     return () => {
       portRef.current = null;
@@ -105,7 +128,7 @@ export function useNetworkLog(): NetworkLogState {
         // Already gone.
       }
     };
-  }, []);
+  }, [pinnedTabId]);
 
   const loadBody = useCallback((exchangeId: string) => {
     const port = portRef.current;
@@ -142,7 +165,41 @@ export function useNetworkLog(): NetworkLogState {
     setBodies({});
   }, []);
 
-  return { connected, tabId, tabUrl, entries, dropped, bodies, loadBody, fetchBody, clear };
+  return {
+    connected,
+    tabId,
+    tabUrl,
+    pinned,
+    tabClosed,
+    entries,
+    dropped,
+    bodies,
+    loadBody,
+    fetchBody,
+    clear,
+  };
+}
+
+/**
+ * Edge's side panel often is not the "current" window, so getCurrent() binds
+ * the log to a window with no tab. Prefer the last focused browser tab.
+ */
+async function subscribePanel(port: chrome.runtime.Port): Promise<void> {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (tab?.windowId !== undefined) {
+      send(port, { kind: 'log/subscribe', windowId: tab.windowId });
+      return;
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    const window = await chrome.windows.getCurrent();
+    send(port, { kind: 'log/subscribe', windowId: window.id });
+  } catch {
+    send(port, { kind: 'log/subscribe' });
+  }
 }
 
 function send(port: chrome.runtime.Port, message: PanelToBg): void {

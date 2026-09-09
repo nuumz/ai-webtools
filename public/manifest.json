@@ -2,16 +2,17 @@
   "manifest_version": 3,
   "name": "DevTool: API Mutator & Form Filler",
   "version": "1.0.0",
-  "description": "Side Panel extension for API mocking, dynamic response mutation, and auto-filling forms.",
-  "minimum_chrome_version": "114",
+  "description": "Per-tab Side Panel for API mocking, dynamic response mutation, and auto-filling forms.",
+  "minimum_chrome_version": "116",
   "permissions": [
     "sidePanel",
     "storage",
     "scripting",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "tabs"
   ],
   "action": {
-    "default_title": "Open Dev Panel"
+    "default_title": "Open Dev Panel for this tab"
   },
   "side_panel": {
     "default_path": "index.html"

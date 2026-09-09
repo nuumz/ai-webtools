@@ -102,6 +102,12 @@ export const CAPTURE_EVENT = '__DEV_TOOL_CAPTURE__';
 /** MAIN -> ISOLATED: fetch one story body by key. ISOLATED replies on BODY_REPLY_EVENT. */
 export const BODY_REQUEST_EVENT = '__DEV_TOOL_BODY_REQUEST__';
 export const BODY_REPLY_EVENT = '__DEV_TOOL_BODY_REPLY__';
+/**
+ * sessionStorage flag so the MAIN interceptor can start capturing on the next
+ * document_start tick — chrome.storage is async and the page's first fetch
+ * often wins that race.
+ */
+export const CAPTURE_FLAG = '__DEV_TOOL_CAPTURE__';
 
 export const DEFAULT_FORM_FILL_FIELDS: FormFillField[] = [
   { selector: '#email', value: 'tester@dev.local' },

@@ -6,10 +6,12 @@ import { getBody } from '../shared/bodyStore';
 import { PORT_PAGE, type PageToBg } from '../shared/messages';
 import { originMatches, ruleAppliesToOrigin } from '../shared/match';
 import { DEFAULT_STRICT_PATTERN, entryToRule, type StoryEntry, type StoryMeta } from '../shared/story';
+import { onBus, postBus, writeStoredConfig } from '../shared/pageBus';
 import {
   BODY_REPLY_EVENT,
   BODY_REQUEST_EVENT,
   CAPTURE_EVENT,
+  CAPTURE_FLAG,
   REQUEST_EVENT,
   STORAGE_KEYS,
   SYNC_EVENT,
@@ -26,6 +28,7 @@ const RATE_LIMIT_PER_SEC = 50;
 
 let settings: Settings = normalizeSettings(undefined);
 let lastPushed = '';
+let lastCapture = '';
 let syncTimer: ReturnType<typeof setTimeout> | undefined;
 
 // ---------------------------------------------------------------- config push
@@ -71,15 +74,24 @@ const readConfig = async (): Promise<PageConfig> => {
   };
 };
 
+const writeCaptureFlag = (on: boolean): void => {
+  try {
+    sessionStorage.setItem(CAPTURE_FLAG, on ? '1' : '0');
+  } catch {
+    /* opaque / sandboxed origin */
+  }
+};
+
 const pushConfig = async (): Promise<void> => {
   try {
     const config = await readConfig();
-    // `detail` is serialised: objects created in this world are not directly
-    // usable by page scripts, but a string always crosses the world boundary.
+    writeCaptureFlag(config.settings.captureEnabled);
     const payload = JSON.stringify(config);
+    writeStoredConfig(payload);
     if (payload !== lastPushed) {
       lastPushed = payload;
       window.dispatchEvent(new CustomEvent(SYNC_EVENT, { detail: payload }));
+      postBus('sync', payload);
     }
     syncPort();
   } catch (err) {
@@ -100,10 +112,9 @@ const schedulePush = (): void => {
 
 let port: chrome.runtime.Port | undefined;
 
-/** Connects only while recording, so idle tabs never hold the service worker awake. */
+/** Connects as soon as config is known, so the panel can bind this tab before Record. */
 const syncPort = (): void => {
-  if (settings.captureEnabled) openPort();
-  else closePort();
+  openPort();
 };
 
 const openPort = (): chrome.runtime.Port | undefined => {
@@ -114,22 +125,18 @@ const openPort = (): chrome.runtime.Port | undefined => {
       port = undefined;
     });
     port = opened;
-    post({ kind: 'page/hello', url: location.href, isTop: window.top === window });
+    let isTop = false;
+    try {
+      isTop = window.top === window;
+    } catch {
+      isTop = false;
+    }
+    post({ kind: 'page/hello', url: location.href, isTop });
     return port;
   } catch {
-    // Extension reloaded or context invalidated — retry on the next record.
     port = undefined;
     return undefined;
   }
-};
-
-const closePort = (): void => {
-  try {
-    port?.disconnect();
-  } catch {
-    // Already gone.
-  }
-  port = undefined;
 };
 
 const post = (message: PageToBg): void => {
@@ -157,11 +164,12 @@ const takeToken = (): boolean => {
   return true;
 };
 
-window.addEventListener(CAPTURE_EVENT, ((event: CustomEvent<string>) => {
-  if (!settings.captureEnabled) return;
+const forwardCapture = (raw: string): void => {
+  if (!settings.captureEnabled || !raw || raw === lastCapture) return;
+  lastCapture = raw;
   let batch: CapturedExchange[];
   try {
-    batch = JSON.parse(event.detail ?? '[]') as CapturedExchange[];
+    batch = JSON.parse(raw || '[]') as CapturedExchange[];
   } catch {
     return;
   }
@@ -177,17 +185,22 @@ window.addEventListener(CAPTURE_EVENT, ((event: CustomEvent<string>) => {
     post({ kind: 'capture/dropped', count: dropped });
     dropped = 0;
   }
+};
+
+window.addEventListener(CAPTURE_EVENT, ((event: CustomEvent<string>) => {
+  forwardCapture(event.detail ?? '');
 }) as EventListener);
+onBus('capture', forwardCapture);
 
 // ------------------------------------------------------- story body requests
 
 // Registered unconditionally: replay must work whether or not we are recording,
 // and reading storage here avoids holding a port open just to serve bodies.
-window.addEventListener(BODY_REQUEST_EVENT, ((event: CustomEvent<string>) => {
+const replyBody = (raw: string): void => {
   let requestId = '';
   let bodyKey = '';
   try {
-    ({ requestId, bodyKey } = JSON.parse(event.detail ?? '{}') as { requestId: string; bodyKey: string });
+    ({ requestId, bodyKey } = JSON.parse(raw || '{}') as { requestId: string; bodyKey: string });
   } catch {
     return;
   }
@@ -196,18 +209,25 @@ window.addEventListener(BODY_REQUEST_EVENT, ((event: CustomEvent<string>) => {
   void getBody(bodyKey)
     .catch(() => undefined)
     .then((text) => {
-      window.dispatchEvent(
-        new CustomEvent(BODY_REPLY_EVENT, {
-          detail: JSON.stringify({ requestId, text: text ?? null }),
-        }),
-      );
+      const encoded = JSON.stringify({ requestId, text: text ?? null });
+      window.dispatchEvent(new CustomEvent(BODY_REPLY_EVENT, { detail: encoded }));
+      postBus('bodyRes', encoded);
     });
+};
+
+window.addEventListener(BODY_REQUEST_EVENT, ((event: CustomEvent<string>) => {
+  replyBody(event.detail ?? '');
 }) as EventListener);
+onBus('bodyReq', replyBody);
 
 // ----------------------------------------------------------------- lifecycle
 
 // 1. The interceptor asks for config as soon as it boots (it may miss the first push).
 window.addEventListener(REQUEST_EVENT, () => {
+  lastPushed = '';
+  void pushConfig();
+});
+onBus('request', () => {
   lastPushed = '';
   void pushConfig();
 });

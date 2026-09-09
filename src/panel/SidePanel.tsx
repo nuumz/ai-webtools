@@ -267,10 +267,25 @@ export default function SidePanel() {
     ? resolveProfile(activeProfile, { counters })
     : { fields: [], values: {}, counters, errors: [] };
 
+  /**
+   * Every page action goes to the tab this panel was opened for — not to
+   * whichever tab happens to be focused, which may be a different one entirely
+   * now that each tab carries its own panel.
+   */
+  const targetTab = async (): Promise<chrome.tabs.Tab | undefined> => {
+    if (log.tabId === undefined) return activeTab();
+    try {
+      return await chrome.tabs.get(log.tabId);
+    } catch {
+      showToast('This panel’s tab is gone');
+      return undefined;
+    }
+  };
+
   const fillForm = async () => {
     if (!activeProfile) return;
     try {
-      const browserTab = await activeTab();
+      const browserTab = await targetTab();
       if (browserTab?.id === undefined) return;
 
       const resolved = resolveProfile(activeProfile, { counters });
@@ -312,7 +327,7 @@ export default function SidePanel() {
   const pickField = async (fieldId?: string) => {
     if (!activeProfile) return;
     try {
-      const browserTab = await activeTab();
+      const browserTab = await targetTab();
       if (browserTab?.id === undefined) return;
       showToast('Click a field on the page…');
 
@@ -348,7 +363,7 @@ export default function SidePanel() {
   const recordForm = async (secrets = includeSecrets) => {
     if (!activeProfile) return;
     try {
-      const browserTab = await activeTab();
+      const browserTab = await targetTab();
       if (browserTab?.id === undefined) return;
       setIncludeSecrets(secrets);
       setRecorded(await runRecord(browserTab.id, secrets));
@@ -403,14 +418,25 @@ export default function SidePanel() {
       <header className="shrink-0 border-b border-line bg-surface">
         <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">
           <span className="shrink-0 text-[13px] font-semibold tracking-tight">Dev Interceptor</span>
-          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint" title={log.tabUrl}>
-            {hostOf(log.tabUrl) ?? (log.connected ? 'waiting for the page…' : 'not connected')}
+          <span
+            className={`min-w-0 flex-1 truncate font-mono text-[11px] ${log.tabClosed ? 'text-bad' : 'text-faint'}`}
+            title={log.tabClosed ? 'The tab this panel belongs to was closed' : log.tabUrl}
+          >
+            {log.tabClosed
+              ? 'tab closed'
+              : (hostOf(log.tabUrl) ?? (log.connected ? 'waiting for the page…' : 'not connected'))}
           </span>
           <button
             onClick={fillForm}
-            disabled={!activeProfile}
+            disabled={!activeProfile || log.tabClosed}
             className="btn btn-primary shrink-0"
-            title={activeProfile ? `Fill with ${activeProfile.name}` : 'No profile'}
+            title={
+              log.tabClosed
+                ? 'The tab this panel belongs to was closed'
+                : activeProfile
+                  ? `Fill with ${activeProfile.name}`
+                  : 'No profile'
+            }
           >
             Fill
           </button>

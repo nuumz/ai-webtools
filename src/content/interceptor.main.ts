@@ -17,10 +17,12 @@ import { mergeDeep } from '../shared/merge';
 import { applyOps } from '../shared/pathOps';
 import { randomId } from '../shared/ids';
 import { bodyKeyForHit } from '../shared/story';
+import { onBus, postBus, readStoredConfig } from '../shared/pageBus';
 import {
   BODY_REPLY_EVENT,
   BODY_REQUEST_EVENT,
   CAPTURE_EVENT,
+  CAPTURE_FLAG,
   DEFAULT_SETTINGS,
   REQUEST_EVENT,
   SYNC_EVENT,
@@ -38,8 +40,16 @@ if (globalScope[INSTALL_FLAG]) {
   install();
 }
 
+function readCaptureFlag(): boolean {
+  try {
+    return sessionStorage.getItem(CAPTURE_FLAG) === '1';
+  } catch {
+    return false;
+  }
+}
+
 function install(): void {
-  let settings: Settings = DEFAULT_SETTINGS;
+  let settings: Settings = { ...DEFAULT_SETTINGS, captureEnabled: readCaptureFlag() };
   let activeRules: CompiledRule[] = [];
   let strictMatchers: ((url: string) => boolean)[] = [];
   /** How many times each story entry has answered in THIS frame. */
@@ -47,31 +57,33 @@ function install(): void {
   const bodyCache = new Map<string, string>();
   const pendingBodies = new Map<string, (text: string | undefined) => void>();
 
-  window.addEventListener(SYNC_EVENT, ((event: CustomEvent<string>) => {
+  const applyConfig = (raw: string): void => {
+    if (!raw) return;
     try {
-      const parsed: unknown = JSON.parse(event.detail ?? '[]');
-      // A bare array is the v1 payload shape; still accepted so older callers keep working.
+      const parsed: unknown = JSON.parse(raw);
       const config: PageConfig = Array.isArray(parsed)
         ? { version: 2, settings: DEFAULT_SETTINGS, rules: parsed as MutationRule[] }
         : (parsed as PageConfig);
-      settings = config.settings ?? DEFAULT_SETTINGS;
-      // Story entries are rule-shaped and carry a lower priority, so the sort
-      // inside compileRules is what makes hand-written rules win.
+      settings = config.settings ?? settings;
       activeRules = compileRules([...(config.rules ?? []), ...(config.storyRules ?? [])]);
       strictMatchers = (config.strictPatterns ?? []).map(compilePattern);
-      // Rules changed, so sequence positions no longer mean anything.
       hits.clear();
     } catch (err) {
       console.error('[Interceptor] Could not read config:', err);
-      settings = DEFAULT_SETTINGS;
-      activeRules = [];
-      strictMatchers = [];
     }
-  }) as EventListener);
+  };
 
-  window.addEventListener(BODY_REPLY_EVENT, ((event: CustomEvent<string>) => {
+  const stored = readStoredConfig();
+  if (stored) applyConfig(stored);
+
+  window.addEventListener(SYNC_EVENT, ((event: CustomEvent<string>) => {
+    applyConfig(event.detail ?? '');
+  }) as EventListener);
+  onBus('sync', applyConfig);
+
+  const takeBodyReply = (raw: string): void => {
     try {
-      const { requestId, text } = JSON.parse(event.detail ?? '{}') as {
+      const { requestId, text } = JSON.parse(raw || '{}') as {
         requestId: string;
         text: string | null;
       };
@@ -80,12 +92,17 @@ function install(): void {
       pendingBodies.delete(requestId);
       resolve(typeof text === 'string' ? text : undefined);
     } catch {
-      // Malformed reply: the pending request falls back to its timeout.
+      /* Malformed reply: the pending request falls back to its timeout. */
     }
-  }) as EventListener);
+  };
 
-  // The bridge may have pushed before this listener existed — ask for a resend.
+  window.addEventListener(BODY_REPLY_EVENT, ((event: CustomEvent<string>) => {
+    takeBodyReply(event.detail ?? '');
+  }) as EventListener);
+  onBus('bodyRes', takeBodyReply);
+
   window.dispatchEvent(new CustomEvent(REQUEST_EVENT));
+  postBus('request');
 
   const log = (message: string, ...rest: unknown[]) =>
     console.log(`%c[Interceptor]%c ${message}`, 'color:#6366f1;font-weight:bold', '', ...rest);
@@ -107,7 +124,9 @@ function install(): void {
     const batch = queue;
     queue = [];
     try {
-      window.dispatchEvent(new CustomEvent(CAPTURE_EVENT, { detail: JSON.stringify(batch) }));
+      const encoded = JSON.stringify(batch);
+      window.dispatchEvent(new CustomEvent(CAPTURE_EVENT, { detail: encoded }));
+      postBus('capture', encoded);
     } catch (err) {
       console.error('[Interceptor] Could not emit capture batch:', err);
     }
@@ -146,9 +165,9 @@ function install(): void {
         resolve(text);
       });
 
-      window.dispatchEvent(
-        new CustomEvent(BODY_REQUEST_EVENT, { detail: JSON.stringify({ requestId, bodyKey }) }),
-      );
+      const encoded = JSON.stringify({ requestId, bodyKey });
+      window.dispatchEvent(new CustomEvent(BODY_REQUEST_EVENT, { detail: encoded }));
+      postBus('bodyReq', encoded);
     });
   };
 

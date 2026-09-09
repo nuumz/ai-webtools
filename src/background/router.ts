@@ -18,6 +18,12 @@ import {
 interface PanelState {
   windowId: number;
   tabId?: number;
+  /**
+   * A pinned panel was opened for one specific tab and stays with it: it must
+   * not re-target when the user switches tabs, otherwise two panels of the same
+   * window would show the same traffic.
+   */
+  pinned: boolean;
 }
 
 const panelPorts = new Map<chrome.runtime.Port, PanelState>();
@@ -32,16 +38,35 @@ export function initRouter(): void {
 
   chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
     for (const [port, state] of panelPorts) {
-      if (state.windowId !== windowId) continue;
+      if (state.pinned || state.windowId !== windowId) continue;
       state.tabId = tabId;
-      sendToPanel(port, { kind: 'tab/changed', tabId, url: tabUrls.get(tabId) });
+      sendToPanel(port, { kind: 'tab/changed', tabId, url: tabUrls.get(tabId), pinned: false });
       sendLogReset(port, tabId);
     }
+  });
+
+  // A pinned panel outlives navigation, so it needs the new address even when
+  // the content script never reports in (chrome://, blocked pages).
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (!changeInfo.url) return;
+    tabUrls.set(tabId, changeInfo.url);
+    broadcast(tabId, (port) =>
+      sendToPanel(port, {
+        kind: 'tab/changed',
+        tabId,
+        url: changeInfo.url,
+        pinned: panelPorts.get(port)?.pinned ?? false,
+      }),
+    );
   });
 
   chrome.tabs.onRemoved.addListener((tabId) => {
     tabUrls.delete(tabId);
     clearTab(tabId);
+    for (const [port, state] of panelPorts) {
+      if (state.tabId !== tabId) continue;
+      sendToPanel(port, { kind: 'tab/closed', tabId });
+    }
   });
 }
 
@@ -54,11 +79,19 @@ function handlePagePort(port: chrome.runtime.Port): void {
     switch (message.kind) {
       case 'page/hello':
         if (message.isTop) {
-          // A fresh top-frame load: the previous page's traffic is no longer relevant.
+          const previousUrl = tabUrls.get(tabId);
           tabUrls.set(tabId, message.url);
-          clearTab(tabId);
+          /* Port reconnects (SW idle) reuse the URL — do not wipe the log. */
+          if (previousUrl !== message.url) clearTab(tabId);
+          claimOrphanPanels(tabId, message.url);
           broadcast(tabId, (panelPort) => {
-            sendToPanel(panelPort, { kind: 'tab/changed', tabId, url: message.url });
+            const state = panelPorts.get(panelPort);
+            sendToPanel(panelPort, {
+              kind: 'tab/changed',
+              tabId,
+              url: message.url,
+              pinned: state?.pinned ?? false,
+            });
             sendLogReset(panelPort, tabId);
           });
         }
@@ -84,7 +117,7 @@ function handlePagePort(port: chrome.runtime.Port): void {
 }
 
 function handlePanelPort(port: chrome.runtime.Port): void {
-  panelPorts.set(port, { windowId: chrome.windows.WINDOW_ID_NONE });
+  panelPorts.set(port, { windowId: chrome.windows.WINDOW_ID_NONE, pinned: false });
   port.onDisconnect.addListener(() => panelPorts.delete(port));
 
   port.onMessage.addListener((raw) => {
@@ -94,12 +127,17 @@ function handlePanelPort(port: chrome.runtime.Port): void {
 
     switch (message.kind) {
       case 'log/subscribe':
-        state.windowId = message.windowId;
-        void resolveActiveTab(message.windowId).then((tabId) => {
+        if (message.windowId !== undefined) state.windowId = message.windowId;
+        if (message.tabId !== undefined) {
+          state.pinned = true;
+          state.tabId = message.tabId;
+          void attachToTab(port, message.tabId);
+          break;
+        }
+        void resolveActiveTab(state.windowId).then((tabId) => {
           if (tabId === undefined) return;
           state.tabId = tabId;
-          sendToPanel(port, { kind: 'tab/changed', tabId, url: tabUrls.get(tabId) });
-          sendLogReset(port, tabId);
+          void attachToTab(port, tabId);
         });
         break;
       case 'log/clear':
@@ -124,13 +162,49 @@ function handlePanelPort(port: chrome.runtime.Port): void {
   });
 }
 
-async function resolveActiveTab(windowId: number): Promise<number | undefined> {
+/** Hands a panel its tab's identity and backlog in one go. */
+async function attachToTab(port: chrome.runtime.Port, tabId: number): Promise<void> {
   await restoreFromSession();
+  const state = panelPorts.get(port);
+  if (!state) return;
+
+  let url = tabUrls.get(tabId);
+  if (url === undefined) {
+    // The page port only reports on load; a panel opened later still needs the address.
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      url = tab.url;
+      if (url) tabUrls.set(tabId, url);
+    } catch {
+      sendToPanel(port, { kind: 'tab/closed', tabId });
+      return;
+    }
+  }
+
+  sendToPanel(port, { kind: 'tab/changed', tabId, url, pinned: state.pinned });
+  sendLogReset(port, tabId);
+}
+
+async function resolveActiveTab(windowId: number): Promise<number | undefined> {
   try {
-    const [tab] = await chrome.tabs.query({ active: true, windowId });
-    return tab?.id;
+    if (windowId !== chrome.windows.WINDOW_ID_NONE) {
+      const [inWindow] = await chrome.tabs.query({ active: true, windowId });
+      if (inWindow?.id !== undefined) return inWindow.id;
+    }
+    const [focused] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    return focused?.id;
   } catch {
     return undefined;
+  }
+}
+
+/** A panel that never resolved a tab still receives this page's log. */
+function claimOrphanPanels(tabId: number, url: string): void {
+  for (const [port, state] of panelPorts) {
+    if (state.tabId !== undefined) continue;
+    state.tabId = tabId;
+    sendToPanel(port, { kind: 'tab/changed', tabId, url, pinned: state.pinned });
+    sendLogReset(port, tabId);
   }
 }
 

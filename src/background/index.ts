@@ -13,10 +13,34 @@ import { DEFAULT_FORM_FILL_FIELDS, STORAGE_KEYS, type MutationRule } from '../sh
 import { initRouter } from './router';
 import { restoreFromSession } from './logStore';
 
-// Clicking the toolbar icon opens the Side Panel.
+/** The panel document is per tab, so its tab is baked into the URL it is opened with. */
+const PANEL_PATH = 'index.html';
+
 chrome.sidePanel
-  .setPanelBehavior({ openPanelOnActionClick: true })
+  .setPanelBehavior({ openPanelOnActionClick: false })
   .catch((error) => console.error('[DevTool] Error setting panel behavior:', error));
+
+chrome.action.onClicked.addListener((tab) => {
+  const tabId = tab.id;
+  if (tabId === undefined) return;
+  const path = `${PANEL_PATH}?tabId=${tabId}`;
+  /*
+   * Both calls stay in the gesture's own task: awaiting setOptions first would
+   * spend the user gesture that open() requires.
+   * Edge ignores per-tab setOptions/open more often than Chrome — fall back to
+   * the window so the panel still appears; the panel then pins via lastFocused tab.
+   */
+  void chrome.sidePanel
+    .setOptions({ tabId, path, enabled: true })
+    .catch(() => chrome.sidePanel.setOptions({ path, enabled: true }));
+  void chrome.sidePanel.open({ tabId }).catch((error) => {
+    if (tab.windowId !== undefined) {
+      void chrome.sidePanel.open({ windowId: tab.windowId });
+      return;
+    }
+    console.error('[DevTool] Error opening panel:', error);
+  });
+});
 
 initRouter();
 void restoreFromSession();

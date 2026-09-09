@@ -33,7 +33,7 @@ Full stubbing is still available when you want the network out of the picture en
 | --- | --- | --- |
 | `src/panel/*` | Extension page | React UI: network log, rule CRUD, form profiles |
 | `src/inject/formAgent.ts` | Injected into the page | Fills, records and picks fields across frames and shadow roots |
-| `src/background/index.ts` | Service worker | Opens the panel, seeds storage, drives the toolbar badge |
+| `src/background/index.ts` | Service worker | Opens a per-tab panel, seeds storage, drives the toolbar badge |
 | `src/background/router.ts` | Service worker | Port registry: page capture in, panel updates out |
 | `src/background/logStore.ts` | Service worker | Per-tab ring buffer of captured exchanges |
 | `src/content/bridge.isolated.ts` | ISOLATED | Pushes config to the page, forwards capture, serves story bodies |
@@ -59,13 +59,19 @@ carries the tab id and frame URL for free, and an idle tab holds no port open.
 
 ## The panel
 
+**One panel per tab.** Clicking the toolbar icon opens a panel bound to *that* tab — it
+keeps showing that tab's traffic and fills that tab's forms even after you switch away,
+and it closes with the tab. Open a second tab, click the icon again, and you get a second,
+independent panel; both share the same rules, profiles and settings. The header shows the
+bound tab's host, or `tab closed` once that tab is gone.
+
 Four tabs, so each one fits without scrolling: **Network** (watch traffic), **Mocks**
 (stories and rules), **Fill** (form profiles) and **Settings** (backup, sync, storage).
-The header carries the master switch and the current host; everything else lives in a tab.
+The header carries the master switch and the bound tab's host; everything else lives in a tab.
 
 ## Network log
 
-Press **Record** and every `fetch`/`XHR` on the active tab shows up: method, path, status,
+Press **Record** and every `fetch`/`XHR` on the panel's tab shows up: method, path, status,
 duration and size, with a badge when the response did not come from the network —
 `STORY` for a replayed recording, `STUB` for something faked outright, `MUTATED` for a
 real response that was altered. Expand a row to see the request and response bodies, then
@@ -235,7 +241,8 @@ npm run build       # typecheck + Vite (panel) + esbuild (worker/content scripts
 ```
 
 Then in Edge (`edge://extensions`) or Chrome (`chrome://extensions`): enable **Developer
-mode** → **Load unpacked** → select `dist/`. Click the toolbar icon to open the panel.
+mode** → **Load unpacked** → select `dist/`. Click the toolbar icon on any tab to open a
+panel for that tab.
 
 Other scripts:
 
