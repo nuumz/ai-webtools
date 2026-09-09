@@ -16,8 +16,13 @@ export interface NetworkLogState {
   dropped: number;
   bodies: Record<string, ExchangeBodies>;
   loadBody: (exchangeId: string) => void;
+  /** Awaitable variant, for flows that need several bodies at once (saving to a story). */
+  fetchBody: (exchangeId: string) => Promise<ExchangeBodies>;
   clear: () => void;
 }
+
+const NOT_FOUND: ExchangeBodies = { found: false };
+const BODY_TIMEOUT_MS = 3000;
 
 /**
  * Owns the panel's single port to the service worker: tab identity and the log
@@ -31,6 +36,7 @@ export function useNetworkLog(): NetworkLogState {
   const [entries, setEntries] = useState<ExchangeMeta[]>([]);
   const [dropped, setDropped] = useState(0);
   const [bodies, setBodies] = useState<Record<string, ExchangeBodies>>({});
+  const bodyWaiters = useRef(new Map<string, ((bodies: ExchangeBodies) => void)[]>());
 
   useEffect(() => {
     if (typeof chrome === 'undefined' || !chrome.runtime?.connect) return;
@@ -62,16 +68,20 @@ export function useNetworkLog(): NetworkLogState {
           }
           setDropped(message.dropped);
           break;
-        case 'log/body':
-          setBodies((current) => ({
-            ...current,
-            [message.exchangeId]: {
-              found: message.found,
-              request: message.request,
-              response: message.response,
-            },
-          }));
+        case 'log/body': {
+          const value: ExchangeBodies = {
+            found: message.found,
+            request: message.request,
+            response: message.response,
+          };
+          setBodies((current) => ({ ...current, [message.exchangeId]: value }));
+          const waiters = bodyWaiters.current.get(message.exchangeId);
+          if (waiters) {
+            bodyWaiters.current.delete(message.exchangeId);
+            for (const resolve of waiters) resolve(value);
+          }
           break;
+        }
       }
     });
 
@@ -102,6 +112,28 @@ export function useNetworkLog(): NetworkLogState {
     if (port) send(port, { kind: 'log/getBody', exchangeId });
   }, []);
 
+  const fetchBody = useCallback((exchangeId: string): Promise<ExchangeBodies> => {
+    const port = portRef.current;
+    if (!port) return Promise.resolve(NOT_FOUND);
+
+    return new Promise((resolve) => {
+      const waiters = bodyWaiters.current.get(exchangeId) ?? [];
+      waiters.push(resolve);
+      bodyWaiters.current.set(exchangeId, waiters);
+      send(port, { kind: 'log/getBody', exchangeId });
+
+      setTimeout(() => {
+        const pending = bodyWaiters.current.get(exchangeId);
+        if (!pending?.includes(resolve)) return;
+        // The worker restarted or dropped the body; do not hang the caller.
+        const remaining = pending.filter((entry) => entry !== resolve);
+        if (remaining.length > 0) bodyWaiters.current.set(exchangeId, remaining);
+        else bodyWaiters.current.delete(exchangeId);
+        resolve(NOT_FOUND);
+      }, BODY_TIMEOUT_MS);
+    });
+  }, []);
+
   const clear = useCallback(() => {
     const port = portRef.current;
     if (port) send(port, { kind: 'log/clear' });
@@ -110,7 +142,7 @@ export function useNetworkLog(): NetworkLogState {
     setBodies({});
   }, []);
 
-  return { connected, tabId, tabUrl, entries, dropped, bodies, loadBody, clear };
+  return { connected, tabId, tabUrl, entries, dropped, bodies, loadBody, fetchBody, clear };
 }
 
 function send(port: chrome.runtime.Port, message: PanelToBg): void {

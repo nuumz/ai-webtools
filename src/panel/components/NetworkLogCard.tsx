@@ -1,19 +1,55 @@
 import { useMemo, useState } from 'react';
 import ExchangeDetail from './ExchangeDetail';
 import type { ExchangeMeta } from '../../shared/capture';
+import type { StoryMeta } from '../../shared/story';
 import type { NetworkLogState } from '../hooks/useNetworkLog';
 import type { RuleDraft } from './RuleForm';
+
+const NEW_STORY = '__new__';
 
 interface Props {
   log: NetworkLogState;
   capturing: boolean;
+  stories: StoryMeta[];
   onToggleCapture: () => void;
   onCreateRule: (draft: RuleDraft) => void;
+  onSaveToStory: (exchangeIds: string[], target: { storyId?: string; name?: string }) => Promise<void>;
 }
 
-export default function NetworkLogCard({ log, capturing, onToggleCapture, onCreateRule }: Props) {
+export default function NetworkLogCard({
+  log,
+  capturing,
+  stories,
+  onToggleCapture,
+  onCreateRule,
+  onSaveToStory,
+}: Props) {
   const [filter, setFilter] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [target, setTarget] = useState<string>(NEW_STORY);
+  const [newName, setNewName] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const toggleSelected = (id: string) =>
+    setSelected((current) =>
+      current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id],
+    );
+
+  const save = async () => {
+    if (selected.length === 0 || saving) return;
+    setSaving(true);
+    try {
+      await onSaveToStory(
+        selected,
+        target === NEW_STORY ? { name: newName.trim() || 'Story' } : { storyId: target },
+      );
+      setSelected([]);
+      setNewName('');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const visible = useMemo(() => {
     const needle = filter.trim().toLowerCase();
@@ -74,9 +110,21 @@ export default function NetworkLogCard({ log, capturing, onToggleCapture, onCrea
           <ul className="divide-y divide-gray-100 border border-gray-100 rounded">
             {visible.map((exchange) => (
               <li key={exchange.id}>
+                <div className="flex items-center gap-2 px-2 hover:bg-slate-50">
+                  <input
+                    type="checkbox"
+                    className="shrink-0"
+                    checked={selected.includes(exchange.id)}
+                    onChange={() => toggleSelected(exchange.id)}
+                    title={
+                      exchange.servedBy === 'network'
+                        ? 'Select for a story'
+                        : 'Replayed traffic is skipped when saving'
+                    }
+                  />
                 <button
                   onClick={() => setExpandedId(expandedId === exchange.id ? null : exchange.id)}
-                  className="w-full flex items-center gap-2 px-2 py-1.5 text-left hover:bg-slate-50"
+                  className="flex-1 min-w-0 flex items-center gap-2 py-1.5 text-left"
                 >
                   <span className="text-[10px] font-bold text-slate-500 w-10 shrink-0">{exchange.method}</span>
                   <span className={`text-[10px] font-bold w-8 shrink-0 ${statusColor(exchange)}`}>
@@ -93,6 +141,7 @@ export default function NetworkLogCard({ log, capturing, onToggleCapture, onCrea
                   )}
                   <span className="text-[10px] text-gray-400 shrink-0">{formatBytes(exchange.resBytes)}</span>
                 </button>
+                </div>
                 {expandedId === exchange.id && (
                   <ExchangeDetail
                     exchange={exchange}
@@ -104,6 +153,45 @@ export default function NetworkLogCard({ log, capturing, onToggleCapture, onCrea
               </li>
             ))}
           </ul>
+        )}
+
+        {selected.length > 0 && (
+          <div className="mt-3 border-t border-gray-200 pt-3 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-gray-600">{selected.length} selected →</span>
+            <select
+              className="border rounded p-1 text-[11px]"
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+            >
+              <option value={NEW_STORY}>＋ New story</option>
+              {stories.map((story) => (
+                <option key={story.id} value={story.id}>
+                  {story.name}
+                </option>
+              ))}
+            </select>
+            {target === NEW_STORY && (
+              <input
+                className="border rounded p-1 text-[11px] flex-1 min-w-[6rem]"
+                placeholder="Story name"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+              />
+            )}
+            <button
+              onClick={save}
+              disabled={saving}
+              className="bg-slate-800 text-white rounded px-2.5 py-1 text-[11px] hover:bg-slate-700 disabled:opacity-50"
+            >
+              {saving ? 'Saving…' : 'Save to story'}
+            </button>
+            <button
+              onClick={() => setSelected([])}
+              className="text-[11px] text-gray-500 hover:underline"
+            >
+              Cancel
+            </button>
+          </div>
         )}
       </div>
     </div>

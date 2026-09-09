@@ -74,11 +74,15 @@ export function compileRules(rules: MutationRule[]): CompiledRule[] {
     .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 }
 
-/** True when the rule has no origin scope, or one of its patterns matches the origin. */
-export function ruleAppliesToOrigin(rule: MutationRule, origin: string): boolean {
-  const origins = rule.scope?.origins;
+/** True when there is no origin scope, or one of its patterns matches the origin. */
+export function originMatches(origins: string[] | undefined, origin: string): boolean {
   if (!origins || origins.length === 0) return true;
   return origins.some((pattern) => compilePattern(pattern)(origin));
+}
+
+/** True when the rule has no origin scope, or one of its patterns matches the origin. */
+export function ruleAppliesToOrigin(rule: MutationRule, origin: string): boolean {
+  return originMatches(rule.scope?.origins, origin);
 }
 
 export function findRule(

@@ -6,6 +6,8 @@
  * tokens and PII are never written to a port, to storage, or to the log.
  */
 
+import { randomId } from './ids';
+
 /** Bodies larger than this are stored truncated — a log is not an archive. */
 export const MAX_BODY_BYTES = 64 * 1024;
 /** Above this, MUTATE_RESPONSE passes through: buffering + reparsing costs more than the mock is worth. */
@@ -91,11 +93,8 @@ export interface ExchangeMeta {
   resBytes: number;
 }
 
-/** `crypto.randomUUID` needs a secure context; pages served over plain http do not have one. */
 export function newExchangeId(): string {
-  const uuid = globalThis.crypto?.randomUUID;
-  if (typeof uuid === 'function') return uuid.call(globalThis.crypto);
-  return `x${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+  return randomId('ex_');
 }
 
 export function truncateText(text: string): { text: string; bytes: number; truncated: boolean } {

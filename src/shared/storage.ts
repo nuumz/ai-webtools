@@ -2,10 +2,12 @@ import {
   DEFAULT_FORM_FILL_FIELDS,
   DEFAULT_SETTINGS,
   STORAGE_KEYS,
+  storyEntriesKey,
   type FormFillField,
   type MutationRule,
   type Settings,
 } from './types';
+import type { StoryEntry, StoryMeta } from './story';
 
 const hasChromeStorage = (): boolean =>
   typeof chrome !== 'undefined' && !!chrome.storage?.local;
@@ -54,4 +56,34 @@ export function normalizeSettings(raw: unknown): Settings {
     captureEnabled: partial.captureEnabled ?? DEFAULT_SETTINGS.captureEnabled,
     redactKeys: Array.isArray(partial.redactKeys) ? partial.redactKeys : DEFAULT_SETTINGS.redactKeys,
   };
+}
+
+export async function loadStories(): Promise<StoryMeta[]> {
+  if (!hasChromeStorage()) return [];
+  const stored = await chrome.storage.local.get([STORAGE_KEYS.stories]);
+  const stories = stored[STORAGE_KEYS.stories];
+  return Array.isArray(stories) ? (stories as StoryMeta[]) : [];
+}
+
+export async function saveStories(stories: StoryMeta[]): Promise<void> {
+  if (!hasChromeStorage()) return;
+  await chrome.storage.local.set({ [STORAGE_KEYS.stories]: stories });
+}
+
+export async function loadStoryEntries(storyId: string): Promise<StoryEntry[]> {
+  if (!hasChromeStorage()) return [];
+  const key = storyEntriesKey(storyId);
+  const stored = await chrome.storage.local.get(key);
+  const entries = stored[key];
+  return Array.isArray(entries) ? (entries as StoryEntry[]) : [];
+}
+
+export async function saveStoryEntries(storyId: string, entries: StoryEntry[]): Promise<void> {
+  if (!hasChromeStorage()) return;
+  await chrome.storage.local.set({ [storyEntriesKey(storyId)]: entries });
+}
+
+export async function removeStory(storyId: string): Promise<void> {
+  if (!hasChromeStorage()) return;
+  await chrome.storage.local.remove(storyEntriesKey(storyId));
 }
