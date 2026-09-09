@@ -71,6 +71,15 @@ export default function StoriesCard({ stories, onUpdate, onDelete }: Props) {
                   <label className="flex items-center gap-2 text-[11px] text-gray-600">
                     <input
                       type="checkbox"
+                      checked={story.replayTiming}
+                      onChange={(e) => onUpdate({ ...story, replayTiming: e.target.checked })}
+                    />
+                    Replay the latency each response was recorded with
+                  </label>
+
+                  <label className="flex items-center gap-2 text-[11px] text-gray-600">
+                    <input
+                      type="checkbox"
                       checked={story.strict}
                       onChange={(e) => onUpdate({ ...story, strict: e.target.checked })}
                     />

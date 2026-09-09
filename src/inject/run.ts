@@ -7,6 +7,7 @@
  * quiet the moment the user moved to the next page.
  */
 import type { FieldSelector, ResolvedFillField } from '../shared/form';
+import { randomId } from '../shared/ids';
 import { formAgent, type AgentResult, type RecordedField } from './formAgent';
 
 export interface FillOutcome {
@@ -50,7 +51,7 @@ export interface PickOutcome {
 
 /** Resolves once the user clicks in one frame; the other frames cancel themselves. */
 export async function runPick(tabId: number): Promise<PickOutcome | null> {
-  const results = await execute(tabId, { kind: 'pick' });
+  const results = await execute(tabId, { kind: 'pick', sessionId: randomId('pk_') });
   for (const result of results) {
     if (result?.kind === 'pick' && result.selectors && result.selectors.length > 0) {
       return { selectors: result.selectors, label: result.label, value: result.value };

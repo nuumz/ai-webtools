@@ -66,6 +66,22 @@ export async function startServer() {
     if (url.pathname === '/api/error') {
       return json({ message: 'boom' }, 500);
     }
+    if (url.pathname === '/api/slow') {
+      const wait = Number(url.searchParams.get('ms') ?? '0');
+      return setTimeout(() => json({ slow: true, waited: wait }), wait);
+    }
+    if (url.pathname === '/api/items') {
+      return json({
+        status: 'PENDING',
+        data: {
+          items: [
+            { sku: 'a', price: 100, inStock: true },
+            { sku: 'b', price: 200, inStock: true },
+          ],
+          total: 300,
+        },
+      });
+    }
     res.writeHead(404);
     res.end();
   });

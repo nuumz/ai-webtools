@@ -1,5 +1,4 @@
 import {
-  DEFAULT_FORM_FILL_FIELDS,
   DEFAULT_SETTINGS,
   STORAGE_KEYS,
   storyEntriesKey,
@@ -25,13 +24,6 @@ export async function saveRules(rules: MutationRule[]): Promise<void> {
   await chrome.storage.local.set({ [STORAGE_KEYS.rules]: rules });
 }
 
-export async function loadFormFillFields(): Promise<FormFillField[]> {
-  if (!hasChromeStorage()) return DEFAULT_FORM_FILL_FIELDS;
-  const stored = await chrome.storage.local.get([STORAGE_KEYS.formFill]);
-  const fields = stored[STORAGE_KEYS.formFill];
-  return Array.isArray(fields) ? (fields as FormFillField[]) : DEFAULT_FORM_FILL_FIELDS;
-}
-
 export async function loadSettings(): Promise<Settings> {
   if (!hasChromeStorage()) return DEFAULT_SETTINGS;
   const stored = await chrome.storage.local.get([STORAGE_KEYS.settings]);
@@ -55,6 +47,8 @@ export function normalizeSettings(raw: unknown): Settings {
       partial.lastProfileByOrigin && typeof partial.lastProfileByOrigin === 'object'
         ? partial.lastProfileByOrigin
         : {},
+    syncEnabled: partial.syncEnabled ?? DEFAULT_SETTINGS.syncEnabled,
+    ...(partial.syncStatus ? { syncStatus: partial.syncStatus } : {}),
   };
 }
 

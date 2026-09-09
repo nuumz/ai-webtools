@@ -11,9 +11,6 @@ export type PageToBg =
   | { kind: 'capture/exchange'; exchanges: CapturedExchange[] }
   | { kind: 'capture/dropped'; count: number };
 
-/** Reserved for phase 2+ (picker/fill commands); declared so the router can switch exhaustively. */
-export type BgToPage = { kind: 'page/noop' };
-
 export type PanelToBg =
   | { kind: 'log/subscribe'; windowId: number }
   | { kind: 'log/clear' }
