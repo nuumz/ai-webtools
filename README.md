@@ -57,11 +57,19 @@ The bridge opens a `chrome.runtime` port to the service worker **only while reco
 which is what makes the network log work without any extra permissions: `port.sender`
 carries the tab id and frame URL for free, and an idle tab holds no port open.
 
+## The panel
+
+Four tabs, so each one fits without scrolling: **Network** (watch traffic), **Mocks**
+(stories and rules), **Fill** (form profiles) and **Settings** (backup, sync, storage).
+The header carries the master switch and the current host; everything else lives in a tab.
+
 ## Network log
 
-Press **Record** in the panel and every `fetch`/`XHR` on the active tab shows up: method,
-path, status, size, and a badge when the response was served by a stub or mutated. Expand
-a row to see the request and response bodies, then turn it into a rule with one click:
+Press **Record** and every `fetch`/`XHR` on the active tab shows up: method, path, status,
+duration and size, with a badge when the response did not come from the network —
+`STORY` for a replayed recording, `STUB` for something faked outright, `MUTATED` for a
+real response that was altered. Expand a row to see the request and response bodies, then
+turn it into a rule with one click:
 
 | Button | Creates |
 | --- | --- |
@@ -80,9 +88,10 @@ content types are stored at all.
 
 ## Stories
 
-A **story** is a set of real responses, captured once and replayed on demand. Tick the rows
-you want in the network log, pick *Save to story*, and the responses are stored under their
-own content hash. Activate the story and those endpoints answer from the recording — with
+A **story** is a set of real responses, captured once and replayed on demand. Press **Select** in the network log, tick the rows you want and
+choose *Save to story*; the responses are stored under their own content hash. Rows that a
+mock already served cannot be ticked — recording those would capture the mock as if it
+were real. Activate the story and those endpoints answer from the recording — with
 the backend switched off entirely, if you like.
 
 - **Sequences come for free.** Save the same endpoint twice and the entries fold into a
