@@ -57,7 +57,9 @@ export default function RuleList({ rules, onToggle, onDelete, onEdit }: Props) {
               {rule.fault && (
                 <Chip>{rule.fault.kind === 'status' ? `fails ${rule.fault.status}` : rule.fault.kind}</Chip>
               )}
-              {rule.ops?.length ? <Chip>{rule.ops.length} edit(s)</Chip> : null}
+              {rule.ops?.length ? (
+                <Chip>{rule.ops.length === 1 ? '1 edit' : `${rule.ops.length} edits`}</Chip>
+              ) : null}
             </div>
           )}
           <pre className="text-[11px] text-gray-500 bg-slate-50 rounded p-2 overflow-x-auto max-h-24">

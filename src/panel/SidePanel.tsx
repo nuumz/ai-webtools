@@ -4,6 +4,7 @@ import RuleList from './components/RuleList';
 import ProfilesCard from './components/ProfilesCard';
 import RecordedFieldsDialog from './components/RecordedFieldsDialog';
 import SettingsCard from './components/SettingsCard';
+import TabBar, { type TabId } from './components/TabBar';
 import NetworkLogCard from './components/NetworkLogCard';
 import StoriesCard from './components/StoriesCard';
 import { useNetworkLog } from './hooks/useNetworkLog';
@@ -62,6 +63,8 @@ export default function SidePanel() {
   const [includeSecrets, setIncludeSecrets] = useState(false);
   const [usage, setUsage] = useState(0);
   const [storageBusy, setStorageBusy] = useState<string | null>(null);
+  const [tab, setTab] = useState<TabId>('network');
+  const [ruleFormOpen, setRuleFormOpen] = useState(false);
   const log = useNetworkLog();
 
   useEffect(() => {
@@ -121,10 +124,12 @@ export default function SidePanel() {
     if (editing) {
       persistRules(rules.map((rule) => (rule.id === editing.id ? { ...rule, ...submitted } : rule)));
       setEditing(undefined);
+      setRuleFormOpen(false);
       return;
     }
     persistRules([...rules, { id: randomId('rl_'), isActive: true, ...submitted }]);
     setDraft(undefined);
+    setRuleFormOpen(false);
   };
 
   const toggleRule = (id: string) =>
@@ -190,7 +195,15 @@ export default function SidePanel() {
     setEditing(undefined);
     // A fresh object identity is what re-hydrates the form.
     setDraft({ ...fromExchange });
-    showToast('Draft loaded below — review, then save');
+    setRuleFormOpen(true);
+    setTab('mocks');
+    showToast('Draft ready in Mocks — review, then save');
+  };
+
+  const editRule = (rule: MutationRule) => {
+    setEditing(rule);
+    setRuleFormOpen(true);
+    setTab('mocks');
   };
 
   /**
@@ -257,18 +270,18 @@ export default function SidePanel() {
   const fillForm = async () => {
     if (!activeProfile) return;
     try {
-      const tab = await activeTab();
-      if (tab?.id === undefined) return;
+      const browserTab = await activeTab();
+      if (browserTab?.id === undefined) return;
 
       const resolved = resolveProfile(activeProfile, { counters });
       if (resolved.errors.length > 0) {
         showToast(resolved.errors[0]);
         return;
       }
-      const outcome = await runFill(tab.id, resolved.fields);
+      const outcome = await runFill(browserTab.id, resolved.fields);
       setCounters(resolved.counters);
       void saveCounters(resolved.counters);
-      rememberProfileForTab(tab.url, activeProfile.id);
+      rememberProfileForTab(browserTab.url, activeProfile.id);
 
       showToast(
         outcome.misses.length > 0
@@ -299,11 +312,11 @@ export default function SidePanel() {
   const pickField = async (fieldId?: string) => {
     if (!activeProfile) return;
     try {
-      const tab = await activeTab();
-      if (tab?.id === undefined) return;
+      const browserTab = await activeTab();
+      if (browserTab?.id === undefined) return;
       showToast('Click a field on the page…');
 
-      const picked = await runPick(tab.id);
+      const picked = await runPick(browserTab.id);
       if (!picked) {
         showToast('Picking cancelled');
         return;
@@ -335,10 +348,10 @@ export default function SidePanel() {
   const recordForm = async (secrets = includeSecrets) => {
     if (!activeProfile) return;
     try {
-      const tab = await activeTab();
-      if (tab?.id === undefined) return;
+      const browserTab = await activeTab();
+      if (browserTab?.id === undefined) return;
       setIncludeSecrets(secrets);
-      setRecorded(await runRecord(tab.id, secrets));
+      setRecorded(await runRecord(browserTab.id, secrets));
     } catch (err) {
       console.error('[Panel] Record failed:', err);
       showToast('Record failed — see console');
@@ -383,94 +396,123 @@ export default function SidePanel() {
 
   const activeCount = rules.filter((rule) => rule.isActive).length;
 
+  const activeStories = stories.filter((story) => story.isActive).length;
+
   return (
     <div className="flex flex-col h-screen bg-gray-50 text-sm font-sans">
-      <header className="bg-slate-900 text-white shadow-md">
-        <div className="p-4 flex justify-between items-center">
-          <div>
-            <h1 className="font-bold text-lg leading-tight">Dev Interceptor</h1>
-            <p className="text-[11px] text-slate-400 truncate max-w-[15rem]" title={log.tabUrl}>
-              {log.tabUrl ?? (log.connected ? 'waiting for the page…' : 'not connected')}
-            </p>
-          </div>
+      <header className="bg-slate-900 text-white shadow-md shrink-0">
+        <div className="px-3 pt-2.5 pb-2 flex items-center gap-2">
+          <span className="font-bold text-sm shrink-0">Dev Interceptor</span>
+          <span className="text-[11px] text-slate-400 truncate flex-1" title={log.tabUrl}>
+            {hostOf(log.tabUrl) ?? (log.connected ? 'waiting for the page…' : 'not connected')}
+          </span>
           <button
-            onClick={fillForm}
-            disabled={!activeProfile}
-            className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-xs px-3 py-1.5 rounded-md transition-colors"
+            onClick={() => persistSettings({ ...settings, enabled: !settings.enabled })}
+            title={settings.enabled ? 'Interception is on' : 'Interception is off'}
+            className={`text-[11px] px-2 py-1 rounded-md shrink-0 transition-colors ${
+              settings.enabled
+                ? 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25'
+                : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+            }`}
           >
-            Fill form
+            {settings.enabled ? `On · ${activeCount}` : 'Off'}
           </button>
         </div>
-        <div className="px-4 pb-3 flex items-center gap-3 text-xs">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={settings.enabled}
-              onChange={(e) => persistSettings({ ...settings, enabled: e.target.checked })}
-            />
-            <span className={settings.enabled ? 'text-emerald-400' : 'text-slate-400'}>
-              {settings.enabled ? `Interception on (${activeCount})` : 'Interception off'}
-            </span>
-          </label>
-        </div>
+
+        <TabBar
+          active={tab}
+          onSelect={setTab}
+          tabs={[
+            { id: 'network', label: 'Network', count: log.entries.length },
+            { id: 'mocks', label: 'Mocks', count: activeCount + activeStories },
+            { id: 'fill', label: 'Fill', count: activeProfile?.fields.length },
+            { id: 'settings', label: 'Settings' },
+          ]}
+        />
       </header>
 
-      <main className="p-4 flex-1 overflow-y-auto">
-        <NetworkLogCard
-          log={log}
-          capturing={settings.captureEnabled}
-          stories={stories}
-          onToggleCapture={() =>
-            persistSettings({ ...settings, captureEnabled: !settings.captureEnabled })
-          }
-          onCreateRule={handleCreateRule}
-          onSaveToStory={saveToStory}
-        />
+      <main className="p-4 flex-1 min-h-0 overflow-y-auto flex flex-col">
+        {tab === 'network' && (
+          <NetworkLogCard
+            log={log}
+            capturing={settings.captureEnabled}
+            stories={stories}
+            onToggleCapture={() =>
+              persistSettings({ ...settings, captureEnabled: !settings.captureEnabled })
+            }
+            onCreateRule={handleCreateRule}
+            onSaveToStory={saveToStory}
+          />
+        )}
 
-        <StoriesCard
-          stories={stories}
-          onUpdate={(story) =>
-            persistStories(stories.map((item) => (item.id === story.id ? story : item)))
-          }
-          onDelete={(storyId) => void deleteStory(storyId)}
-        />
+        {tab === 'mocks' && (
+          <>
+            <StoriesCard
+              stories={stories}
+              onUpdate={(story) =>
+                persistStories(stories.map((item) => (item.id === story.id ? story : item)))
+              }
+              onDelete={(storyId) => void deleteStory(storyId)}
+            />
 
-        <RuleForm
-          editing={editing}
-          initialDraft={draft}
-          onSubmit={handleSubmit}
-          onCancel={() => setEditing(undefined)}
-        />
-        <ProfilesCard
-          profiles={profiles}
-          activeId={profileId}
-          preview={previewed.values}
-          errors={previewed.errors}
-          onSelect={setProfileId}
-          onChange={updateProfile}
-          onCreate={createProfile}
-          onDuplicate={duplicateProfile}
-          onDelete={deleteProfile}
-          onFill={() => void fillForm()}
-          onRecord={() => void recordForm()}
-          onPick={(fieldId) => void pickField(fieldId)}
-        />
+            {ruleFormOpen ? (
+              <RuleForm
+                editing={editing}
+                initialDraft={draft}
+                onSubmit={handleSubmit}
+                onCancel={() => {
+                  setEditing(undefined);
+                  setRuleFormOpen(false);
+                }}
+              />
+            ) : (
+              <button
+                onClick={() => {
+                  setEditing(undefined);
+                  setRuleFormOpen(true);
+                }}
+                className="w-full mb-6 border border-dashed border-gray-300 rounded-lg py-2 text-xs text-gray-500 hover:bg-white"
+              >
+                + New rule
+              </button>
+            )}
 
-        <SettingsCard
-          settings={settings}
-          usageBytes={usage}
-          busy={storageBusy}
-          onChange={persistSettings}
-          onExport={() => void handleExport()}
-          onImport={(file, mode) => void handleImport(file, mode)}
-          onTrim={(maxKb) => void handleTrim(maxKb)}
-          onCollectGarbage={() => void handleCollectGarbage()}
-        />
+            <h2 className="font-semibold text-gray-700 mb-3">
+              Rules <span className="text-gray-400 font-normal">({activeCount} active)</span>
+            </h2>
+            <RuleList rules={rules} onToggle={toggleRule} onDelete={deleteRule} onEdit={editRule} />
+          </>
+        )}
 
-        <h2 className="font-semibold text-gray-700 mb-3">
-          Rules <span className="text-gray-400 font-normal">({activeCount} active)</span>
-        </h2>
-        <RuleList rules={rules} onToggle={toggleRule} onDelete={deleteRule} onEdit={setEditing} />
+        {tab === 'fill' && (
+          <ProfilesCard
+            profiles={profiles}
+            activeId={profileId}
+            preview={previewed.values}
+            errors={previewed.errors}
+            onSelect={setProfileId}
+            onChange={updateProfile}
+            onCreate={createProfile}
+            onDuplicate={duplicateProfile}
+            onDelete={deleteProfile}
+            onFill={() => void fillForm()}
+            onRecord={() => void recordForm()}
+            onPick={(fieldId) => void pickField(fieldId)}
+          />
+        )}
+
+        {tab === 'settings' && (
+          <SettingsCard
+            settings={settings}
+            usageBytes={usage}
+            busy={storageBusy}
+            onChange={persistSettings}
+            onExport={() => void handleExport()}
+            onImport={(file, mode) => void handleImport(file, mode)}
+            onTrim={(maxKb) => void handleTrim(maxKb)}
+            onCollectGarbage={() => void handleCollectGarbage()}
+          />
+        )}
       </main>
 
       {recorded && (
@@ -490,4 +532,13 @@ export default function SidePanel() {
       )}
     </div>
   );
+}
+
+function hostOf(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
 }
