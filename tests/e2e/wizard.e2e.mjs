@@ -207,6 +207,31 @@ export default async function run() {
       [{ key: 'issuedBy', selectors: [{ strategy: 'id', value: 'issuedBy' }], value: 'เขตราษฎร์บูรณะ' }],
     );
     t.check(`and it is filled there (${what})`, (filled.filled ?? []).join(','), 'issuedBy');
+
+    // Pick runs in every frame at once and only one is clicked; the rest have to
+    // cancel themselves, or executeScript waits on them forever.
+    const session = `pk_${what}`;
+    const both = Promise.all([
+      outer.mainFrame().evaluate((id) => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick', sessionId: id }), session),
+      app.evaluate((id) => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick', sessionId: id }), session),
+    ]);
+    await app.waitForFunction(() => window.__DEV_TOOL_PICKING__ === true);
+    await app.click('#docNumber');
+    const settled = await Promise.race([
+      both,
+      new Promise((resolve) => setTimeout(() => resolve('timed out'), 5000)),
+    ]);
+    t.check(
+      `a pick inside a ${what} simulator returns the field that was clicked`,
+      settled === 'timed out' ? 'timed out' : (settled[1].selectors ?? [])[0]?.value,
+      'docNumber',
+    );
+    t.check(
+      `and the simulator's own frame stands down (${what})`,
+      settled === 'timed out' ? 'timed out' : settled[0].selectors,
+      null,
+    );
+
     await outer.close();
   }
 

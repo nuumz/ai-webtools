@@ -108,6 +108,31 @@ export default async function run() {
     false,
   );
 
+  // ------------------------------------------------------ picking off the page
+
+  // A picker that never settles is indistinguishable from one that was never
+  // injected, so a regression has to fail rather than hang.
+  const within = (ms, promise) =>
+    Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve('timed out'), ms))]);
+
+  const picking = page.evaluate(() =>
+    window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick', sessionId: 'pk_kesc' }),
+  );
+  await page.waitForFunction(() => window.__DEV_TOOL_PICKING__ === true);
+  await page.click('[name=recordedBy]');
+  const picked = await within(4000, picking);
+  t.check(
+    'a field whose node is replaced mid-gesture is still picked',
+    picked === 'timed out' ? 'timed out' : (picked.selectors ?? [])[0]?.value,
+    'recordedBy',
+  );
+  t.check(
+    'and it carries the caption a person reads',
+    picked === 'timed out' ? 'timed out' : picked.label,
+    'ผู้บันทึก',
+  );
+  t.check('and the picker is disarmed afterwards', await page.evaluate(() => window.__DEV_TOOL_PICKING__), undefined);
+
   // ------------------------------------------------- a frame that cannot answer
 
   // A frame where the agent throws used to return undefined, which the panel

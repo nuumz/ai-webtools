@@ -853,18 +853,48 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
           box.style.height = `${rect.height}px`;
         };
 
-        const onClick = (event: MouseEvent): void => {
+        /**
+         * Picks on the way DOWN, not on `click`.
+         *
+         * A framework app re-renders while the button is still held: the node
+         * under the pointer is replaced between mousedown and mouseup, and a
+         * `click` event is then never dispatched at all. Waiting for one leaves
+         * the picker armed forever, which is indistinguishable from a picker
+         * that was never injected — the frame just goes quiet.
+         */
+        const onDown = (event: MouseEvent | PointerEvent): void => {
+          if (settled) return;
           event.preventDefault();
           event.stopPropagation();
+          event.stopImmediatePropagation();
           const element = targetOf(event);
           if (!element) return;
-          cancelEverywhere();
-          finish({
-            kind: 'pick',
-            selectors: buildSelectors(element),
-            label: labelFor(element),
-            value: readValue(element),
-          });
+          try {
+            const picked: AgentResult = {
+              kind: 'pick',
+              selectors: buildSelectors(element),
+              label: labelFor(element),
+              value: readValue(element),
+            };
+            cancelEverywhere();
+            finish(picked);
+          } catch (error) {
+            // Never leave the promise pending: a picker that threw has to say
+            // so, or it looks exactly like one that was never armed.
+            cancelEverywhere();
+            finish({
+              kind: 'error',
+              message: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+              url: location.href,
+            });
+          }
+        };
+
+        /** Keeps the app from acting on the gesture we already consumed. */
+        const swallow = (event: Event): void => {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
         };
 
         const onKey = (event: KeyboardEvent): void => {
@@ -919,8 +949,15 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
           delete (window as unknown as Record<string, unknown>).__DEV_TOOL_PICKING__;
           host.remove();
           window.removeEventListener('mousemove', onMove, true);
-          window.removeEventListener('click', onClick, true);
+          window.removeEventListener('pointerdown', onDown, true);
+          window.removeEventListener('mousedown', onDown, true);
           window.removeEventListener('keydown', onKey, true);
+          // The gesture that picked still has a mouseup and a click to come:
+          // let those be swallowed, then stop listening.
+          setTimeout(() => {
+            window.removeEventListener('mouseup', swallow, true);
+            window.removeEventListener('click', swallow, true);
+          }, 0);
           window.removeEventListener('message', onMessage);
           resolve(result);
         };
@@ -931,7 +968,10 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
         // Observable marker: the picker is only live once its listeners are attached.
         (window as unknown as Record<string, unknown>).__DEV_TOOL_PICKING__ = true;
         window.addEventListener('mousemove', onMove, true);
-        window.addEventListener('click', onClick, true);
+        window.addEventListener('pointerdown', onDown, true);
+        window.addEventListener('mousedown', onDown, true);
+        window.addEventListener('mouseup', swallow, true);
+        window.addEventListener('click', swallow, true);
         window.addEventListener('keydown', onKey, true);
         window.addEventListener('message', onMessage);
       });

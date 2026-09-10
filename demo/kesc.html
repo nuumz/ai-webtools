@@ -96,6 +96,8 @@
         <div class="col">
           <div>ออกโดย</div>
           <div><input class="input" name="issuer" maxlength="30" /></div>
+          <div>ผู้บันทึก</div>
+          <div id="volatileBox"><input class="input" name="recordedBy" /></div>
         </div>
       </div>
 
@@ -183,6 +185,21 @@
       document.getElementById('chkPermanentExpiryDate').addEventListener('change', (event) => {
         for (const input of expiry) input.disabled = event.target.checked;
       });
+
+      // A framework app re-renders while the button is still down: the node is
+      // replaced between mousedown and mouseup, so the browser never dispatches
+      // a click for that gesture at all.
+      const volatileBox = document.getElementById('volatileBox');
+      volatileBox.addEventListener(
+        'mousedown',
+        () => {
+          const old = volatileBox.firstElementChild;
+          const fresh = old.cloneNode(true);
+          old.remove();
+          volatileBox.append(fresh);
+        },
+        true,
+      );
 
       const show = (step) => {
         document.getElementById('customer').hidden = step !== 'customer';
