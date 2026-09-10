@@ -43,12 +43,7 @@ import {
   type StoryMeta,
 } from '../shared/story';
 import { randomId } from '../shared/ids';
-import {
-  DEFAULT_SETTINGS,
-  STORAGE_KEYS,
-  type MutationRule,
-  type Settings,
-} from '../shared/types';
+import { DEFAULT_SETTINGS, STORAGE_KEYS, type MutationRule, type Settings } from '../shared/types';
 
 export default function SidePanel() {
   const [rules, setRules] = useState<MutationRule[]>([]);
@@ -85,10 +80,7 @@ export default function SidePanel() {
   // Keep the panel in sync if storage is changed elsewhere (another window, import…).
   useEffect(() => {
     if (typeof chrome === 'undefined' || !chrome.storage?.onChanged) return;
-    const listener = (
-      changes: Record<string, chrome.storage.StorageChange>,
-      area: string,
-    ) => {
+    const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area !== 'local') return;
       const ruleChange = changes[STORAGE_KEYS.rules];
       const profileChange = changes[STORAGE_KEYS.profiles];
@@ -125,7 +117,9 @@ export default function SidePanel() {
 
   const handleSubmit = (submitted: RuleDraft) => {
     if (editing) {
-      persistRules(rules.map((rule) => (rule.id === editing.id ? { ...rule, ...submitted } : rule)));
+      persistRules(
+        rules.map((rule) => (rule.id === editing.id ? { ...rule, ...submitted } : rule)),
+      );
       setEditing(undefined);
       setRuleFormOpen(false);
       return;
@@ -136,7 +130,9 @@ export default function SidePanel() {
   };
 
   const toggleRule = (id: string) =>
-    persistRules(rules.map((rule) => (rule.id === id ? { ...rule, isActive: !rule.isActive } : rule)));
+    persistRules(
+      rules.map((rule) => (rule.id === id ? { ...rule, isActive: !rule.isActive } : rule)),
+    );
 
   const deleteRule = (id: string) => {
     persistRules(rules.filter((rule) => rule.id !== id));
@@ -159,7 +155,9 @@ export default function SidePanel() {
     try {
       setStorageBusy(`Importing ${file.name}…`);
       const report = await importState(JSON.parse(await file.text()), mode);
-      showToast(`Imported ${report.rules} rule(s), ${report.profiles} profile(s), ${report.stories} story(ies)`);
+      showToast(
+        `Imported ${report.rules} rule(s), ${report.profiles} profile(s), ${report.stories} story(ies)`,
+      );
       // Storage listeners re-hydrate rules and profiles; these two are read once.
       void loadStories().then(setStories);
       void loadCounters().then(setCounters);
@@ -216,8 +214,13 @@ export default function SidePanel() {
    * store, so re-recording the same response costs nothing and repeat captures of
    * one endpoint become a replay sequence.
    */
-  const saveToStory = async (exchangeIds: string[], target: { storyId?: string; name?: string }) => {
-    const existing = target.storyId ? stories.find((story) => story.id === target.storyId) : undefined;
+  const saveToStory = async (
+    exchangeIds: string[],
+    target: { storyId?: string; name?: string },
+  ) => {
+    const existing = target.storyId
+      ? stories.find((story) => story.id === target.storyId)
+      : undefined;
     const story = existing ?? newStory(target.name?.trim() || `Story ${stories.length + 1}`);
 
     let entries = existing ? await loadStoryEntries(story.id) : [];
@@ -296,6 +299,12 @@ export default function SidePanel() {
       showToast('This panel’s tab is gone');
       return undefined;
     }
+  };
+
+  const reloadTab = async () => {
+    const browserTab = await targetTab();
+    if (browserTab?.id === undefined) return;
+    await chrome.tabs.reload(browserTab.id);
   };
 
   const fillForm = async () => {
@@ -413,7 +422,11 @@ export default function SidePanel() {
 
   const duplicateProfile = () => {
     if (!activeProfile) return;
-    const copy = { ...newProfile(`${activeProfile.name} copy`), fields: activeProfile.fields, vars: activeProfile.vars };
+    const copy = {
+      ...newProfile(`${activeProfile.name} copy`),
+      fields: activeProfile.fields,
+      vars: activeProfile.vars,
+    };
     persistProfiles([...profiles, copy]);
     setProfileId(copy.id);
   };
@@ -437,7 +450,12 @@ export default function SidePanel() {
     <div className="relative flex h-screen flex-col bg-canvas">
       <header className="shrink-0">
         <div className="toolbar">
-          <ConnectionDot tabClosed={log.tabClosed} reconnecting={reconnecting} live={settings.captureEnabled} />
+          <ConnectionDot
+            tabClosed={log.tabClosed}
+            reconnecting={reconnecting}
+            pageConnected={log.pageConnected}
+            recording={log.recording}
+          />
           <span
             className="min-w-0 flex-1 truncate font-mono text-[11px] text-mute"
             title={
@@ -445,14 +463,17 @@ export default function SidePanel() {
                 ? 'The tab this panel belongs to was closed'
                 : reconnecting
                   ? 'The background worker went idle — reconnecting'
-                  : log.tabUrl
+                  : !log.pageConnected
+                    ? 'No content script is running in this tab — reload it'
+                    : log.tabUrl
             }
           >
             {log.tabClosed
               ? 'tab closed'
               : reconnecting
                 ? 'reconnecting…'
-                : (hostOf(log.tabUrl) ?? (log.connected ? 'waiting for the page…' : 'not connected'))}
+                : (hostOf(log.tabUrl) ??
+                  (log.connected ? 'waiting for the page…' : 'not connected'))}
           </span>
           <button
             onClick={() => persistSettings({ ...settings, enabled: !settings.enabled })}
@@ -490,12 +511,9 @@ export default function SidePanel() {
         {tab === 'network' && (
           <NetworkLogCard
             log={log}
-            capturing={settings.captureEnabled}
             stories={stories}
-            onToggleCapture={() =>
-              persistSettings({ ...settings, captureEnabled: !settings.captureEnabled })
-            }
             onCreateRule={handleCreateRule}
+            onReloadTab={() => void reloadTab()}
             onSaveToStory={saveToStory}
           />
         )}
@@ -539,9 +557,7 @@ export default function SidePanel() {
                 </div>
                 <span className="flex-1" />
                 <span className="text-[11px] text-faint tabular-nums">
-                  {mockView === 'rules'
-                    ? `${activeCount} active`
-                    : `${activeStories} playing`}
+                  {mockView === 'rules' ? `${activeCount} active` : `${activeStories} playing`}
                 </span>
                 {mockView === 'rules' && (
                   <button
@@ -640,17 +656,21 @@ export default function SidePanel() {
 function ConnectionDot({
   tabClosed,
   reconnecting,
-  live,
+  pageConnected,
+  recording,
 }: {
   tabClosed: boolean;
   reconnecting: boolean;
-  live: boolean;
+  pageConnected: boolean;
+  recording: boolean;
 }) {
+  // A dark tab is amber even while recording: the button says it is capturing,
+  // and nothing about the page can reach it.
   const tone = tabClosed
     ? 'bg-bad'
-    : reconnecting
+    : reconnecting || !pageConnected
       ? 'bg-warn'
-      : live
+      : recording
         ? 'bg-bad animate-[pulse-soft_1.4s_ease-in-out_infinite]'
         : 'bg-faint';
   return <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${tone}`} />;

@@ -18,6 +18,12 @@ export interface NetworkLogState {
   tabClosed: boolean;
   /** Record is on for this panel's tab only. */
   recording: boolean;
+  /**
+   * Whether any content script in the tab is talking to the worker. False for a
+   * tab opened before the extension was loaded and for one Chrome refuses to
+   * script — both record nothing, and only this tells them from "no traffic yet".
+   */
+  pageConnected: boolean;
   setRecording: (enabled: boolean) => void;
   entries: ExchangeMeta[];
   dropped: number;
@@ -62,6 +68,7 @@ export function useNetworkLog(): NetworkLogState {
   const [pinned, setPinned] = useState(pinnedTabId !== undefined);
   const [tabClosed, setTabClosed] = useState(false);
   const [recording, setRecordingState] = useState(false);
+  const [pageConnected, setPageConnected] = useState(false);
   const [tabId, setTabId] = useState<number | undefined>(pinnedTabId);
   const [tabUrl, setTabUrl] = useState<string | undefined>(undefined);
   const [entries, setEntries] = useState<ExchangeMeta[]>([]);
@@ -120,9 +127,13 @@ export function useNetworkLog(): NetworkLogState {
             break;
           case 'tab/closed':
             setTabClosed(true);
+            setPageConnected(false);
             break;
           case 'tab/recording':
             setRecordingState(message.recording);
+            break;
+          case 'tab/pages':
+            setPageConnected(message.connected);
             break;
           case 'log/reset':
             setEntries(message.entries);
@@ -155,6 +166,7 @@ export function useNetworkLog(): NetworkLogState {
       port.onDisconnect.addListener(() => {
         if (portRef.current === port) portRef.current = null;
         setConnected(false);
+        setPageConnected(false);
         stopKeepalive();
         // Not an error: an idle worker is torn down and rebuilt on the next
         // connect. Re-subscribing is what makes recording survive that.
@@ -238,6 +250,7 @@ export function useNetworkLog(): NetworkLogState {
     tabClosed,
     recording,
     setRecording,
+    pageConnected,
     entries,
     dropped,
     bodies,

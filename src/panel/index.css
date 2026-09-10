@@ -467,7 +467,10 @@
   }
 
   .empty {
-    margin: 0;
+    /* Explanations here run to a couple of sentences; full panel width at 12px
+       is well past a readable measure. */
+    margin: 0 auto;
+    max-width: 46ch;
     padding: 28px 16px;
     color: var(--faint);
     font-size: 12px;

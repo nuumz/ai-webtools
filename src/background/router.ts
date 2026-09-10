@@ -181,6 +181,12 @@ function setTabRecording(tabId: number, next: boolean): void {
   if (changed) onArmedChange?.();
 }
 
+/** Only the flip matters: extra frames on a connected tab say nothing new. */
+function sendPages(tabId: number): void {
+  const connected = (pagePorts.get(tabId)?.size ?? 0) > 0;
+  broadcast(tabId, (port) => sendToPanel(port, { kind: 'tab/pages', tabId, connected }));
+}
+
 function sendRecording(tabId: number): void {
   const recording = isRecording(tabId);
   broadcast(tabId, (port) => sendToPanel(port, { kind: 'tab/recording', tabId, recording }));
@@ -221,7 +227,9 @@ function handlePagePort(port: chrome.runtime.Port): void {
     frames = new Set();
     pagePorts.set(tabId, frames);
   }
+  const first = frames.size === 0;
   frames.add(port);
+  if (first) sendPages(tabId);
   /*
    * A reload wakes a terminated worker. Answering before session inspect
    * state lands tells the page it is not recording and kills capture.
@@ -233,7 +241,9 @@ function handlePagePort(port: chrome.runtime.Port): void {
 
   port.onDisconnect.addListener(() => {
     frames.delete(port);
-    if (frames.size === 0) pagePorts.delete(tabId);
+    if (frames.size > 0) return;
+    pagePorts.delete(tabId);
+    sendPages(tabId);
   });
 
   port.onMessage.addListener((raw) => {
@@ -398,6 +408,12 @@ async function attachToTab(port: chrome.runtime.Port, tabId: number): Promise<vo
 
   sendToPanel(port, { kind: 'tab/changed', tabId, url, pinned: state.pinned });
   sendToPanel(port, { kind: 'tab/recording', tabId, recording: isRecording(tabId) });
+  // The panel starts out knowing nothing; every later change is a flip it hears about.
+  sendToPanel(port, {
+    kind: 'tab/pages',
+    tabId,
+    connected: (pagePorts.get(tabId)?.size ?? 0) > 0,
+  });
   sendLogReset(port, tabId);
 }
 

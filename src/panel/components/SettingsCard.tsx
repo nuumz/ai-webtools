@@ -17,7 +17,14 @@ interface Props {
 }
 
 /** What the panel offers; any stored value outside the range is clamped on read. */
-const BODY_LIMITS = [64 * 1024, 256 * 1024, 1024 * 1024, 4 * 1024 * 1024, 16 * 1024 * 1024, 32 * 1024 * 1024];
+const BODY_LIMITS = [
+  64 * 1024,
+  256 * 1024,
+  1024 * 1024,
+  4 * 1024 * 1024,
+  16 * 1024 * 1024,
+  32 * 1024 * 1024,
+];
 
 export default function SettingsCard({
   settings,
@@ -54,12 +61,30 @@ export default function SettingsCard({
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
         <Section title="Capture">
-          <label className="flex flex-wrap items-center gap-2 text-[12px]">
+          <label className="flex items-start gap-2 text-[12px]">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={settings.captureEnabled}
+              onChange={(event) => onChange({ ...settings, captureEnabled: event.target.checked })}
+            />
+            Capture every tab, not just the ones Record is on for
+          </label>
+          <p className="note">
+            Record in the Network tab arms one tab at a time — the tab this panel was opened for.
+            This makes every page capture regardless, which is heavier and records tabs you are not
+            looking at.
+          </p>
+
+          <label className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-[12px]">
             <span className="shrink-0">Keep bodies up to</span>
             <select
               value={limit}
               onChange={(event) =>
-                onChange({ ...settings, captureBodyLimit: clampBodyLimit(Number(event.target.value)) })
+                onChange({
+                  ...settings,
+                  captureBodyLimit: clampBodyLimit(Number(event.target.value)),
+                })
               }
               className="field field-sm !w-auto"
             >
@@ -72,8 +97,8 @@ export default function SettingsCard({
           </label>
           <p className="note">
             Anything larger is stored truncated — and a truncated body is broken JSON, so it can be
-            neither stubbed nor replayed. Raise it for an app with large payloads; the log then keeps
-            fewer of them in memory.
+            neither stubbed nor replayed. Raise it for an app with large payloads; the log then
+            keeps fewer of them in memory.
           </p>
         </Section>
 
@@ -119,7 +144,9 @@ export default function SettingsCard({
             Stories and recorded bodies stay on this machine — the sync quota is 100&nbsp;KB. Share
             those with the export file instead.
           </p>
-          {settings.syncStatus && <p className="m-0 text-[11px] text-warn">{settings.syncStatus}</p>}
+          {settings.syncStatus && (
+            <p className="m-0 text-[11px] text-warn">{settings.syncStatus}</p>
+          )}
         </Section>
 
         <Section title="Storage">

@@ -214,6 +214,7 @@ export function makeLog(over: Partial<NetworkLogState> = {}): NetworkLogState {
     tabClosed: false,
     recording: true,
     setRecording: () => {},
+    pageConnected: true,
     entries: exchanges,
     dropped: 0,
     bodies: { ex1: bodies.items, ex3: bodies.checkout },

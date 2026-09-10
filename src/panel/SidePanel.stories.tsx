@@ -74,6 +74,15 @@ export const NotRecording: Story = {
   play: openTab('Network'),
 };
 
+/**
+ * Recording, but no content script runs in the tab — the case that reads as a
+ * quiet app unless the panel says otherwise.
+ */
+export const PageNotConnected: Story = {
+  beforeEach: withChrome({ pageConnected: false, entries: [] }),
+  play: openTab('Network'),
+};
+
 /** A wider window: the log row keeps one line and the path column takes the slack. */
 export const WideViewport: Story = {
   globals: { viewport: { value: 'sidePanelWide' } },

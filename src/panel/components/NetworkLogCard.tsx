@@ -13,10 +13,9 @@ const PANE_MIN = 120;
 
 interface Props {
   log: NetworkLogState;
-  capturing: boolean;
   stories: StoryMeta[];
-  onToggleCapture: () => void;
   onCreateRule: (draft: RuleDraft) => void;
+  onReloadTab: () => void;
   onSaveToStory: (
     exchangeIds: string[],
     target: { storyId?: string; name?: string },
@@ -25,12 +24,13 @@ interface Props {
 
 export default function NetworkLogCard({
   log,
-  capturing,
   stories,
-  onToggleCapture,
   onCreateRule,
+  onReloadTab,
   onSaveToStory,
 }: Props) {
+  const capturing = log.recording;
+  const toggleCapture = () => log.setRecording(!log.recording);
   const [filter, setFilter] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selecting, setSelecting] = useState(false);
@@ -130,7 +130,8 @@ export default function NetworkLogCard({
     <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col">
       <div className="toolbar">
         <button
-          onClick={onToggleCapture}
+          onClick={toggleCapture}
+          disabled={log.tabClosed}
           className={`btn btn-sm ${capturing ? 'btn-live' : 'btn-secondary'}`}
           title={capturing ? 'Stop capturing this tab' : 'Capture this tab’s traffic'}
         >
@@ -191,14 +192,30 @@ export default function NetworkLogCard({
           <p className="empty">
             Not capturing this tab.
             <br />
-            <button onClick={onToggleCapture} className="btn btn-sm btn-secondary mt-3">
+            <button
+              onClick={toggleCapture}
+              disabled={log.tabClosed}
+              className="btn btn-sm btn-secondary mt-3"
+            >
               <IconRecord className="text-bad" />
               Start recording
             </button>
+          </p>
+        ) : !log.pageConnected && !log.tabClosed ? (
+          /*
+           * Recording is on and still nothing can arrive: no content script is
+           * running in the tab. Left as "nothing captured yet" this reads as a
+           * quiet app, and the user waits forever for traffic that cannot come.
+           */
+          <p className="empty">
+            <span className="text-warn">This page isn’t connected — reload the tab.</span>
             <br />
-            <span className="mt-2 inline-block text-faint">
-              Then reload the page to see its traffic.
-            </span>
+            Nothing on it can be captured until a content script runs — a tab opened before the
+            extension was loaded, or one the browser refuses to script.
+            <br />
+            <button onClick={onReloadTab} className="btn btn-sm btn-secondary mt-3">
+              Reload the tab
+            </button>
           </p>
         ) : visible.length === 0 ? (
           <p className="empty">

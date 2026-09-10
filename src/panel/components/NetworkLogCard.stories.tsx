@@ -8,10 +8,9 @@ const meta = {
   component: NetworkLogCard,
   args: {
     log: makeLog(),
-    capturing: true,
     stories,
-    onToggleCapture: fn(),
     onCreateRule: fn(),
+    onReloadTab: fn(),
     onSaveToStory: fn(() => Promise.resolve()),
   },
 } satisfies Meta<typeof NetworkLogCard>;
@@ -23,15 +22,26 @@ type Story = StoryObj<typeof meta>;
 export const Recording: Story = {};
 
 /** Rows only arrive while recording, so this is what you see first. */
-export const Idle: Story = { args: { capturing: false, log: makeLog({ entries: [] }) } };
+export const Idle: Story = { args: { log: makeLog({ recording: false, entries: [] }) } };
 
 export const NothingYet: Story = { args: { log: makeLog({ entries: [] }) } };
+
+/**
+ * Recording, but no content script is running in the tab — a tab opened before
+ * the extension was loaded, or one the browser refuses to script. Without this
+ * state it looks exactly like a quiet app and the user waits forever.
+ */
+export const PageNotConnected: Story = {
+  args: { log: makeLog({ entries: [], pageConnected: false }) },
+};
 
 /** The ring buffer evicts the oldest entries once a tab gets chatty. */
 export const WithDroppedEntries: Story = { args: { log: makeLog({ dropped: 128 }) } };
 
 export const Disconnected: Story = {
-  args: { capturing: false, log: makeLog({ connected: false, entries: [], tabUrl: undefined }) },
+  args: {
+    log: makeLog({ recording: false, connected: false, entries: [], tabUrl: undefined }),
+  },
 };
 
 /** Selecting a row opens the detail pane below the log — the list stays put. */

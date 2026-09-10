@@ -34,6 +34,12 @@ export type BgToPanel =
   /** The pinned tab is gone: the panel keeps its log but can no longer act. */
   | { kind: 'tab/closed'; tabId: number }
   | { kind: 'tab/recording'; tabId: number; recording: boolean }
+  /**
+   * Whether any content script in the tab is talking to the worker. A tab that
+   * was open before the extension — or one Chrome refuses to script — records
+   * nothing, and without this the panel cannot tell that from "no traffic yet".
+   */
+  | { kind: 'tab/pages'; tabId: number; connected: boolean }
   | { kind: 'log/reset'; tabId: number; entries: ExchangeMeta[]; dropped: number }
   | { kind: 'log/append'; tabId: number; entries: ExchangeMeta[]; dropped: number }
   | {

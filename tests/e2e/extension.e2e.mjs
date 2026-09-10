@@ -189,6 +189,67 @@ export default async function run() {
     t.assert('a row shows how long the request took', /\d+ ms|\d+\.\d{2} s/.test(rowText), rowText);
   }
 
+  /*
+   * `tab/pages` is how the panel tells a page that never connected — a tab open
+   * before the extension, or one Chrome refuses to script — from a quiet one.
+   */
+  const pagesFor = (target) =>
+    panel.evaluate(
+      ([id]) =>
+        new Promise((resolve) => {
+          const port = chrome.runtime.connect({ name: 'devtool.panel' });
+          let answer;
+          port.onMessage.addListener((message) => {
+            if (message.kind === 'tab/pages') answer = message.connected;
+          });
+          port.postMessage({ kind: 'log/subscribe', tabId: id });
+          setTimeout(() => {
+            port.disconnect();
+            resolve(answer);
+          }, 1500);
+        }),
+      [target],
+    );
+
+  t.check('a live page reports as connected', await pagesFor(pageTabId), true);
+
+  const darkTab = await context.newPage();
+  await darkTab.goto('chrome://version');
+  const darkTabId = await worker.evaluate(
+    async () => (await chrome.tabs.query({ url: 'chrome://version/*' }))[0]?.id,
+  );
+  t.check('a tab that runs no content script reports as not connected', await pagesFor(darkTabId), false);
+  await darkTab.close();
+
+  /*
+   * Sync is a mirror, and a mock too fat for one sync item never reaches it.
+   * Before the mirrored-key bookkeeping, the next pull deleted it from local —
+   * which is how a stub "kept disappearing" on its own.
+   */
+  await worker.evaluate(async ([blob]) => {
+    await chrome.storage.sync.clear();
+    await chrome.storage.local.remove('syncMirroredKeys');
+    const stored = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({
+      settings: { ...stored.settings, syncEnabled: true },
+      mutationRules: [
+        { id: 'sm', isActive: true, type: 'STUB', urlPattern: '/api/sync-small', method: 'ANY', payload: { a: 1 } },
+        { id: 'lg', isActive: true, type: 'STUB', urlPattern: '/api/sync-large', method: 'ANY', payload: { blob } },
+      ],
+    });
+  }, ['x'.repeat(20000)]);
+
+  // The push is debounced at 1.5 s; then a write from "another device" pulls.
+  await page.waitForTimeout(3000);
+  await worker.evaluate(() => chrome.storage.sync.set({ 'profile:other-device': { id: 'other-device', name: 'p' } }));
+  await page.waitForTimeout(2500);
+
+  const survivors = await worker.evaluate(async () => {
+    const stored = await chrome.storage.local.get('mutationRules');
+    return (stored.mutationRules ?? []).map((rule) => rule.id).sort();
+  });
+  t.check('a mock too large to sync survives a pull', survivors.join(','), 'lg,sm');
+
   await context.close();
   server.close();
   rmSync(profile, { recursive: true, force: true });
