@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { userEvent, waitFor, within } from 'storybook/test';
+import { installChromeMock, type ChromeMockOptions } from './stories/chromeMock';
 import SidePanel from './SidePanel';
 
 /**
@@ -25,6 +26,12 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
+/** Re-installs the stand-in for one story, then puts the default back. */
+const withChrome = (options: ChromeMockOptions) => () => {
+  installChromeMock(options);
+  return () => installChromeMock();
+};
+
 const openTab = (label: string): NonNullable<Story['play']> =>
   async ({ canvasElement }) => {
     const canvas = within(canvasElement);
@@ -46,6 +53,21 @@ export const FillTab: Story = { play: openTab('Fill') };
 
 /** Backup, cross-device sync and storage housekeeping. */
 export const SettingsTab: Story = { play: openTab('Settings') };
+
+/**
+ * The tab the panel was opened for has gone away: the log stays readable, but
+ * nothing can act on the page any more.
+ */
+export const PinnedTabClosed: Story = {
+  beforeEach: withChrome({ tabClosed: true }),
+  play: openTab('Network'),
+};
+
+/** Recording is per tab and starts off until you turn it on. */
+export const NotRecording: Story = {
+  beforeEach: withChrome({ recording: false, entries: [] }),
+  play: openTab('Network'),
+};
 
 /** A wider window, for checking how the two-line log rows reflow. */
 export const WideViewport: Story = {

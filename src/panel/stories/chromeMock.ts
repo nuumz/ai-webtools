@@ -41,11 +41,16 @@ export interface ChromeMockOptions {
   entries?: typeof exchanges;
   /** Extra storage values, merged over the seeded ones. */
   storage?: Store;
+  /** Start with recording on for the pinned tab. */
+  recording?: boolean;
+  /** Report the pinned tab as gone, so the panel goes read-only. */
+  tabClosed?: boolean;
 }
 
 export function installChromeMock(options: ChromeMockOptions = {}): void {
   const store: Store = { ...seed(), ...options.storage };
   const entries = options.entries ?? exchanges;
+  let recording = options.recording ?? true;
 
   const mock = {
     storage: {
@@ -79,8 +84,16 @@ export function installChromeMock(options: ChromeMockOptions = {}): void {
           disconnect: () => {},
           postMessage: (message: PanelToBg) => {
             if (message.kind === 'log/subscribe') {
-              send({ kind: 'tab/changed', tabId: TAB_ID, url: tabUrl });
+              // The real panel is opened as index.html?tabId=<id> and stays with
+              // that tab, so the stand-in always reports itself as pinned.
+              send({ kind: 'tab/changed', tabId: TAB_ID, url: tabUrl, pinned: true });
+              send({ kind: 'tab/recording', tabId: TAB_ID, recording });
               send({ kind: 'log/reset', tabId: TAB_ID, entries, dropped: 0 });
+              if (options.tabClosed) send({ kind: 'tab/closed', tabId: TAB_ID });
+            }
+            if (message.kind === 'log/record') {
+              recording = message.enabled;
+              send({ kind: 'tab/recording', tabId: TAB_ID, recording });
             }
             if (message.kind === 'log/clear') {
               send({ kind: 'log/reset', tabId: TAB_ID, entries: [], dropped: 0 });
