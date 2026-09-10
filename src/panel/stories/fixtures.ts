@@ -14,7 +14,10 @@ import type { NetworkLogState } from '../hooks/useNetworkLog';
 import { DEFAULT_SETTINGS, type MutationRule, type Settings } from '../../shared/types';
 
 const ORIGIN = 'https://shop.internal';
-const T0 = Date.UTC(2026, 2, 17, 9, 30, 0);
+// Anchored to now rather than a fixed date: the log shows a wall clock and an
+// in-flight row measures against `Date.now()`, so a frozen past would render as
+// a request that has been running for months.
+const T0 = Date.now() - 6000;
 
 const pretty = (value: unknown): string => JSON.stringify(value, null, 2);
 
@@ -166,6 +169,27 @@ export const exchanges: ExchangeMeta[] = SEEDS.map((seed, index) => {
   return toExchangeMeta(captured);
 });
 
+/**
+ * A request that has not come back yet. The interceptor emits these with
+ * `durationMs: 0` and `status: 0`; the panel measures the elapsed time itself,
+ * so this has to be anchored to the clock rather than to T0.
+ */
+export function pendingExchange(elapsedMs = 1400): ExchangeMeta {
+  return toExchangeMeta({
+    id: 'ex-pending',
+    startedAt: Date.now() - elapsedMs,
+    durationMs: 0,
+    transport: 'fetch',
+    servedBy: 'network',
+    outcome: 'pending',
+    method: 'GET',
+    url: `${ORIGIN}/api/slow?ms=8000`,
+    status: 0,
+    statusText: '',
+    contentType: '',
+  });
+}
+
 const snapshot = (text: string, extra: { truncated?: boolean; redacted?: boolean } = {}) => ({
   text,
   bytes: text.length,
@@ -186,6 +210,11 @@ export const bodies = {
     response: snapshot(`${pretty(payloads.users).slice(0, 120)}…`, { truncated: true, redacted: true }),
   },
   missing: { found: false },
+  /** Not JSON, so it cannot be turned into a stub — the detail view says why. */
+  html: {
+    found: true,
+    response: snapshot('<!doctype html>\n<title>Gateway timeout</title>\n<h1>504</h1>'),
+  },
 };
 
 export const recordedFields = [

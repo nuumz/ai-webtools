@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { fn, userEvent, within } from 'storybook/test';
-import { exchanges, makeLog, stories } from '../stories/fixtures';
+import { exchanges, makeLog, pendingExchange, stories } from '../stories/fixtures';
 import NetworkLogCard from './NetworkLogCard';
 
 const meta = {
@@ -50,6 +50,14 @@ export const SelectMode: Story = {
     const boxes = canvasElement.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
     for (const box of boxes) if (!box.disabled) await userEvent.click(box);
   },
+};
+
+/**
+ * A request still in flight: the status reads “…”, the duration bar pulses and
+ * grows against the clock, and the row cannot be picked for a story yet.
+ */
+export const InFlight: Story = {
+  args: { log: makeLog({ entries: [pendingExchange(), ...exchanges] }) },
 };
 
 /** A story-heavy setup: everything already replayed, nothing new to record. */

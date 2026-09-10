@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { fn } from 'storybook/test';
-import { bodies, exchanges } from '../stories/fixtures';
+import { bodies, exchanges, pendingExchange } from '../stories/fixtures';
 import ExchangeDetail from './ExchangeDetail';
 
 // Stable across renders: the component asks for bodies from an effect keyed on
@@ -39,6 +39,19 @@ export const TruncatedAndRedacted: Story = {
 /** A request with a query string offers to pin the full URL in the generated rule. */
 export const WithQueryString: Story = {
   args: { exchange: exchanges[2], bodies: bodies.items },
+};
+
+/** Still waiting on the backend — no body to show yet. */
+export const Pending: Story = {
+  args: { exchange: pendingExchange(2600), bodies: bodies.missing },
+};
+
+/**
+ * A body that is not JSON cannot be stubbed, and a truncated one is broken
+ * JSON — both disable the button and say why rather than handing the app `{}`.
+ */
+export const NotJson: Story = {
+  args: { exchange: exchanges[5], bodies: bodies.html },
 };
 
 export const FailedRequest: Story = {
