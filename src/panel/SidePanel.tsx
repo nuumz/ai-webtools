@@ -436,7 +436,7 @@ export default function SidePanel() {
       if (found.length === 0) {
         showToast(
           secrets
-            ? 'Nothing to read — no field on this page can be written to.'
+            ? 'Nothing to read — this page shows no fields the agent can see.'
             : 'Nothing to read here. Password fields are skipped unless you ask for them.',
           4000,
         );
