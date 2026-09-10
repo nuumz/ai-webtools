@@ -94,6 +94,62 @@ export function chunkRecords<T extends { id: string; name?: string; label?: stri
   return { items, skipped };
 }
 
+/**
+ * Keys the last successful push (or pull) proved sync is actually holding.
+ * Device-local bookkeeping, deliberately outside STORAGE_KEYS so it never
+ * travels in an export.
+ */
+const MIRROR_KEY = 'syncMirroredKeys';
+
+async function loadMirrored(): Promise<Set<string> | undefined> {
+  try {
+    const stored = await chrome.storage.local.get(MIRROR_KEY);
+    const keys = stored[MIRROR_KEY];
+    return Array.isArray(keys) ? new Set(keys as string[]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function saveMirrored(keys: string[]): Promise<void> {
+  try {
+    await chrome.storage.local.set({ [MIRROR_KEY]: keys });
+  } catch {
+    // Bookkeeping only: a miss costs one over-cautious pull, never data.
+  }
+}
+
+/**
+ * Folds a pulled set into the local one.
+ *
+ * Sync may only delete what it is known to have carried: a record sync refused
+ * (too fat for one item) or never received (the push failed) is local-only, and
+ * dropping it here is how a mock silently disappears. `mirrored` undefined means
+ * this device has never completed a push, so nothing local is deletable yet.
+ */
+export function mergeMirror<T extends { id: string }>(
+  prefix: string,
+  local: T[],
+  remote: T[],
+  mirrored: Set<string> | undefined,
+): T[] {
+  const incoming = new Map(remote.map((record) => [record.id, record]));
+  const merged: T[] = [];
+
+  for (const record of local) {
+    const fromRemote = incoming.get(record.id);
+    if (fromRemote) {
+      merged.push(fromRemote);
+      incoming.delete(record.id);
+      continue;
+    }
+    if (!mirrored?.has(`${prefix}${record.id}`)) merged.push(record);
+  }
+  // Whatever the other device added since.
+  merged.push(...incoming.values());
+  return merged;
+}
+
 /** Written by the last push; a pull that matches it is our own echo. */
 let lastSyncedHash = '';
 
@@ -130,6 +186,7 @@ export async function pushToSync(): Promise<SyncReport> {
 
     await chrome.storage.sync.set(items);
     lastSyncedHash = hash;
+    await saveMirrored(Object.keys(items).filter((key) => key !== SETTINGS_KEY));
 
     const skipped = [...ruleChunks.skipped, ...profileChunks.skipped];
     await recordStatus(
@@ -181,14 +238,23 @@ export async function pullFromSync(): Promise<boolean> {
     }
   }
 
-  if (stableHash(rules) !== stableHash(await loadRules())) {
-    await saveRules(rules);
+  const mirrored = await loadMirrored();
+
+  const localRules = await loadRules();
+  const mergedRules = mergeMirror(RULE_PREFIX, localRules, rules, mirrored);
+  if (stableHash(mergedRules) !== stableHash(localRules)) {
+    await saveRules(mergedRules);
     changed = true;
   }
-  if (stableHash(profiles) !== stableHash(await loadProfiles())) {
-    await saveProfiles(profiles);
+
+  const localProfiles = await loadProfiles();
+  const mergedProfiles = mergeMirror(PROFILE_PREFIX, localProfiles, profiles, mirrored);
+  if (stableHash(mergedProfiles) !== stableHash(localProfiles)) {
+    await saveProfiles(mergedProfiles);
     changed = true;
   }
+
+  await saveMirrored(Object.keys(stored).filter((key) => key !== SETTINGS_KEY));
 
   lastSyncedHash = hash;
   return changed;
@@ -200,6 +266,8 @@ export async function clearSync(): Promise<void> {
   try {
     await chrome.storage.sync.clear();
     lastSyncedHash = '';
+    // A stale mirror would let the next pull delete records sync no longer holds.
+    await chrome.storage.local.remove(MIRROR_KEY);
   } catch {
     // Nothing to do: the mirror is best-effort.
   }

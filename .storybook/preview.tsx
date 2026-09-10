@@ -9,8 +9,9 @@ installChromeMock();
 const preview: Preview = {
   parameters: {
     layout: 'fullscreen',
-    // index.css already paints the dark workbench on <body>; Storybook's own
-    // background layer would sit on top of it.
+    // index.css paints the panel on <body> and follows the OS scheme, so
+    // Storybook's own background layer would sit on top of it. Flip the OS (or
+    // DevTools' "Emulate prefers-color-scheme") to review the other one.
     backgrounds: { disable: true },
     viewport: {
       options: {
@@ -24,8 +25,10 @@ const preview: Preview = {
   },
   initialGlobals: { viewport: { value: 'sidePanel' } },
   decorators: [
+    // The panel's cards are full-height flex columns, so the frame has to be one
+    // too — a padded block wrapper would collapse every toolbar and scroll area.
     (Story) => (
-      <div className="min-h-screen bg-canvas p-3 font-sans text-[13px] text-ink">
+      <div className="flex h-screen flex-col bg-canvas font-sans text-[12px] text-ink">
         <Story />
       </div>
     ),

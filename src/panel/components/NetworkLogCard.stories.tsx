@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { fn, userEvent, within } from 'storybook/test';
-import { exchanges, makeLog, pendingExchange, stories } from '../stories/fixtures';
+import { exchanges, makeLog, pendingExchange, profiles, stories } from '../stories/fixtures';
 import NetworkLogCard from './NetworkLogCard';
 
 const meta = {
@@ -8,10 +8,11 @@ const meta = {
   component: NetworkLogCard,
   args: {
     log: makeLog(),
-    capturing: true,
     stories,
-    onToggleCapture: fn(),
+    profiles,
     onCreateRule: fn(),
+    onSaveCase: fn(),
+    onReloadTab: fn(),
     onSaveToStory: fn(() => Promise.resolve()),
   },
 } satisfies Meta<typeof NetworkLogCard>;
@@ -23,19 +24,39 @@ type Story = StoryObj<typeof meta>;
 export const Recording: Story = {};
 
 /** Rows only arrive while recording, so this is what you see first. */
-export const Idle: Story = { args: { capturing: false, log: makeLog({ entries: [] }) } };
+export const Idle: Story = { args: { log: makeLog({ recording: false, entries: [] }) } };
 
 export const NothingYet: Story = { args: { log: makeLog({ entries: [] }) } };
+
+/**
+ * Recording, but no content script is running in the tab — a tab opened before
+ * the extension was loaded, or one the browser refuses to script. Without this
+ * state it looks exactly like a quiet app and the user waits forever.
+ */
+export const PageNotConnected: Story = {
+  args: { log: makeLog({ entries: [], pageConnected: false }) },
+};
+
+/**
+ * The same tab after it went dark on traffic it had already captured. The rows
+ * are the whole reason the panel is open, so the warning is a banner over them
+ * and never a screen instead of them.
+ */
+export const PageNotConnectedWithRows: Story = {
+  args: { log: makeLog({ pageConnected: false }) },
+};
 
 /** The ring buffer evicts the oldest entries once a tab gets chatty. */
 export const WithDroppedEntries: Story = { args: { log: makeLog({ dropped: 128 }) } };
 
 export const Disconnected: Story = {
-  args: { capturing: false, log: makeLog({ connected: false, entries: [], tabUrl: undefined }) },
+  args: {
+    log: makeLog({ recording: false, connected: false, entries: [], tabUrl: undefined }),
+  },
 };
 
-/** Expanding a row shows the bodies and the one-click rule buttons. */
-export const RowExpanded: Story = {
+/** Selecting a row opens the detail pane below the log — the list stays put. */
+export const RowSelected: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByText('/api/items'));
@@ -46,7 +67,7 @@ export const RowExpanded: Story = {
 export const SelectMode: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.click(canvas.getByRole('button', { name: 'Select' }));
+    await userEvent.click(canvas.getByRole('button', { name: /Pick responses/ }));
     const boxes = canvasElement.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
     for (const box of boxes) if (!box.disabled) await userEvent.click(box);
   },

@@ -1,4 +1,4 @@
-export type TabId = 'network' | 'mocks' | 'fill' | 'settings';
+export type TabId = 'network' | 'mocks' | 'fill';
 
 interface Tab {
   id: TabId;
@@ -14,7 +14,7 @@ interface Props {
 
 export default function TabBar({ active, tabs, onSelect }: Props) {
   return (
-    <nav className="flex gap-1 px-3" role="tablist">
+    <nav className="flex shrink-0 items-stretch gap-4 border-b border-line bg-surface px-3" role="tablist">
       {tabs.map((tab) => {
         const selected = tab.id === active;
         return (
@@ -23,16 +23,18 @@ export default function TabBar({ active, tabs, onSelect }: Props) {
             role="tab"
             aria-selected={selected}
             onClick={() => onSelect(tab.id)}
-            className={`flex items-center gap-1.5 px-2.5 py-2 text-[12px] border-b-2 transition-colors ${
+            className={`-mb-px flex items-center gap-1.5 border-b-2 pt-1.5 pb-2 text-[12px] transition-colors ${
               selected
-                ? 'border-accent text-ink font-medium'
+                ? 'border-accent font-medium text-ink'
                 : 'border-transparent text-faint hover:text-mute'
             }`}
           >
             {tab.label}
             {tab.count !== undefined && tab.count > 0 && (
               <span
-                className={`tabular-nums text-[10px] ${selected ? 'text-accent' : 'text-faint'}`}
+                className={`min-w-4 rounded-[3px] px-1 text-center text-[10px] font-semibold tabular-nums ${
+                  selected ? 'bg-accent-soft text-accent' : 'bg-raised text-faint'
+                }`}
               >
                 {tab.count}
               </span>

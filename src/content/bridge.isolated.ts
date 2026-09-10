@@ -48,6 +48,29 @@ const readArmedFlag = (): boolean => {
  * is async, and dropping in-flight rows until it lands is how pending never paints.
  * Capture only starts if this tab opened the panel and Record is on for it.
  */
+/**
+ * The worker re-injects this file into a tab whose scripts never ran (a page
+ * opened before the extension, or orphaned by a reload). Injecting twice must
+ * not double every capture, so the second copy stands down.
+ */
+const INSTALL_FLAG = '__DEV_TOOL_BRIDGE_INSTALLED__';
+const bridgeScope = globalThis as unknown as Record<string, unknown>;
+const previous = bridgeScope[INSTALL_FLAG] as (() => boolean) | undefined;
+/*
+ * The worker only re-injects when it can see no port for the tab, so a copy
+ * that is already here should re-attach rather than stand down. One orphaned by
+ * an extension reload cannot re-attach at all — its chrome.* calls are dead —
+ * and standing down for it is what leaves a tab dark until the page is
+ * reloaded by hand.
+ */
+if (typeof previous === 'function' && previous()) {
+  // A live copy took the hint; a second install would double every capture.
+} else {
+  bridgeScope[INSTALL_FLAG] = true;
+  install();
+}
+
+function install(): void {
 let settings: Settings = {
   ...normalizeSettings(undefined),
   captureEnabled: false,
@@ -175,6 +198,31 @@ const syncPort = (): void => {
   openPort();
 };
 
+/*
+ * The worker is terminated whenever it goes idle, and that drops every port.
+ * The page is perfectly fine, so re-attach instead of waiting for the next
+ * request: with no port the panel reads this tab as dark, and the worker cannot
+ * tell the page to start or stop recording. Only the inspected tab reconnects,
+ * so an idle worker is kept alive for that one tab and no other.
+ */
+const REATTACH_BASE_MS = 500;
+const REATTACH_MAX_MS = 10_000;
+let reattachAttempts = 0;
+let reattachTimer: ReturnType<typeof setTimeout> | undefined;
+
+const scheduleReattach = (): void => {
+  if (reattachTimer !== undefined || port) return;
+  if (!armed) return;
+  // The extension was reloaded or removed: this document's scripts are orphaned.
+  if (!chrome.runtime?.id) return;
+  const delay = Math.min(REATTACH_MAX_MS, REATTACH_BASE_MS * 2 ** reattachAttempts);
+  reattachAttempts += 1;
+  reattachTimer = setTimeout(() => {
+    reattachTimer = undefined;
+    openPort();
+  }, delay);
+};
+
 const openPort = (): chrome.runtime.Port | undefined => {
   if (port) return port;
   try {
@@ -191,8 +239,10 @@ const openPort = (): chrome.runtime.Port | undefined => {
     });
     opened.onDisconnect.addListener(() => {
       port = undefined;
+      scheduleReattach();
     });
     port = opened;
+    reattachAttempts = 0;
     let isTop = false;
     try {
       isTop = window.top === window;
@@ -204,6 +254,7 @@ const openPort = (): chrome.runtime.Port | undefined => {
     return port;
   } catch {
     port = undefined;
+    scheduleReattach();
     return undefined;
   }
 };
@@ -218,6 +269,15 @@ const post = (message: PageToBg): boolean => {
     port = undefined;
     return false;
   }
+};
+
+/**
+ * What a second injection into this frame calls instead of installing again.
+ * False means this copy is orphaned and the newcomer should take over.
+ */
+bridgeScope[INSTALL_FLAG] = (): boolean => {
+  if (!chrome.runtime?.id) return false;
+  return openPort() !== undefined;
 };
 
 // --------------------------------------------------------------- capture pipe
@@ -237,10 +297,10 @@ const takeToken = (): boolean => {
 
 const forwardCapture = (raw: string): void => {
   /*
-   * Trust the interceptor for recording, but never forward unless this tab's
-   * Record switch is on.
+   * The interceptor already decided to emit. Gating again on local flags drops
+   * the first requests after reload — those flags lag the worker's inspect state.
    */
-  if (!armed || !recording || !raw || raw === lastCapture) return;
+  if (!raw || raw === lastCapture) return;
   let batch: CapturedExchange[];
   try {
     batch = JSON.parse(raw || '[]') as CapturedExchange[];
@@ -302,15 +362,19 @@ onBus('bodyReq', replyBody);
 // 1. The interceptor asks for config as soon as it boots (it may miss the first push).
 window.addEventListener(REQUEST_EVENT, () => {
   lastPushed = '';
-  void pushConfig();
+  if (armed && recording) void pushConfig();
+  else openPort();
 });
 onBus('request', () => {
   lastPushed = '';
-  void pushConfig();
+  if (armed && recording) void pushConfig();
+  else openPort();
 });
 
-// 2. Push once on load…
-void pushConfig();
+// 2. Push once on load when this tab was already inspecting. Do not write an
+// inert config over a live stored one before the worker answers.
+if (armed && recording) void pushConfig();
+else openPort();
 
 // 3. …and on every edit made in the Side Panel, so changes apply without a reload.
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -324,3 +388,5 @@ chrome.storage.onChanged.addListener((changes, area) => {
   );
   if (touched) schedulePush();
 });
+
+}

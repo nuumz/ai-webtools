@@ -129,6 +129,50 @@ export default async function run() {
 
   // The panel itself, with real chrome APIs: proves the per-tab subscription and
   // that a captured row renders its timing rather than an empty cell.
+  // A form or an API call inside a srcdoc/about:blank frame is invisible without
+  // match_about_blank + match_origin_as_fallback: the content scripts never run there.
+  await page.evaluate(() => {
+    const child = document.createElement('iframe');
+    child.srcdoc = '<form><input id="childField"></form>';
+    document.body.appendChild(child);
+    const blank = document.createElement('iframe');
+    document.body.appendChild(blank);
+    blank.contentDocument.body.innerHTML = '<form><input id="childField"></form>';
+  });
+  await page.waitForTimeout(500);
+
+  const installedIn = {};
+  for (const frame of page.frames()) {
+    installedIn[frame.url() || 'about:blank'] = await frame
+      .evaluate(() => Boolean(window.__DEV_TOOL_INTERCEPTOR_INSTALLED__))
+      .catch(() => 'unreachable');
+  }
+  t.check('the interceptor runs in a srcdoc frame', installedIn['about:srcdoc'], true);
+  t.check('the interceptor runs in an about:blank frame', installedIn['about:blank'], true);
+
+  const framesFilled = await worker.evaluate(async ([id]) => {
+    await chrome.scripting.executeScript({
+      target: { tabId: id, allFrames: true },
+      files: ['formAgent.js'],
+    });
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: id, allFrames: true },
+      func: (command) => window.__DEV_TOOL_FORM_AGENT__(command),
+      args: [
+        {
+          kind: 'fill',
+          fields: [
+            { key: 'childField', selectors: [{ strategy: 'id', value: 'childField' }], value: 'in a frame' },
+          ],
+        },
+      ],
+    });
+    return results.filter((entry) => entry.result?.filled?.includes('childField')).length;
+  }, [pageTabId]);
+
+  // The srcdoc frame and the about:blank one — this page has no other form.
+  t.check('auto-fill reaches every frame that has the field', framesFilled, 2);
+
   const row = panel.locator('li').first();
   const rowText = await row
     .waitFor({ timeout: 5000 })
@@ -144,6 +188,67 @@ export default async function run() {
     t.assert('a row shows the wall-clock start', /\d{2}:\d{2}:\d{2}\.\d{3}/.test(rowText), rowText);
     t.assert('a row shows how long the request took', /\d+ ms|\d+\.\d{2} s/.test(rowText), rowText);
   }
+
+  /*
+   * `tab/pages` is how the panel tells a page that never connected — a tab open
+   * before the extension, or one Chrome refuses to script — from a quiet one.
+   */
+  const pagesFor = (target) =>
+    panel.evaluate(
+      ([id]) =>
+        new Promise((resolve) => {
+          const port = chrome.runtime.connect({ name: 'devtool.panel' });
+          let answer;
+          port.onMessage.addListener((message) => {
+            if (message.kind === 'tab/pages') answer = message.connected;
+          });
+          port.postMessage({ kind: 'log/subscribe', tabId: id });
+          setTimeout(() => {
+            port.disconnect();
+            resolve(answer);
+          }, 1500);
+        }),
+      [target],
+    );
+
+  t.check('a live page reports as connected', await pagesFor(pageTabId), true);
+
+  const darkTab = await context.newPage();
+  await darkTab.goto('chrome://version');
+  const darkTabId = await worker.evaluate(
+    async () => (await chrome.tabs.query({ url: 'chrome://version/*' }))[0]?.id,
+  );
+  t.check('a tab that runs no content script reports as not connected', await pagesFor(darkTabId), false);
+  await darkTab.close();
+
+  /*
+   * Sync is a mirror, and a mock too fat for one sync item never reaches it.
+   * Before the mirrored-key bookkeeping, the next pull deleted it from local —
+   * which is how a stub "kept disappearing" on its own.
+   */
+  await worker.evaluate(async ([blob]) => {
+    await chrome.storage.sync.clear();
+    await chrome.storage.local.remove('syncMirroredKeys');
+    const stored = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({
+      settings: { ...stored.settings, syncEnabled: true },
+      mutationRules: [
+        { id: 'sm', isActive: true, type: 'STUB', urlPattern: '/api/sync-small', method: 'ANY', payload: { a: 1 } },
+        { id: 'lg', isActive: true, type: 'STUB', urlPattern: '/api/sync-large', method: 'ANY', payload: { blob } },
+      ],
+    });
+  }, ['x'.repeat(20000)]);
+
+  // The push is debounced at 1.5 s; then a write from "another device" pulls.
+  await page.waitForTimeout(3000);
+  await worker.evaluate(() => chrome.storage.sync.set({ 'profile:other-device': { id: 'other-device', name: 'p' } }));
+  await page.waitForTimeout(2500);
+
+  const survivors = await worker.evaluate(async () => {
+    const stored = await chrome.storage.local.get('mutationRules');
+    return (stored.mutationRules ?? []).map((rule) => rule.id).sort();
+  });
+  t.check('a mock too large to sync survives a pull', survivors.join(','), 'lg,sm');
 
   await context.close();
   server.close();

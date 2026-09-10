@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import RuleForm, { type RuleDraft } from './components/RuleForm';
 import RuleList from './components/RuleList';
 import ProfilesCard from './components/ProfilesCard';
 import RecordedFieldsDialog from './components/RecordedFieldsDialog';
 import SettingsCard from './components/SettingsCard';
 import TabBar, { type TabId } from './components/TabBar';
+import { IconPlus, IconSettings } from './components/icons';
 import NetworkLogCard from './components/NetworkLogCard';
 import StoriesCard from './components/StoriesCard';
 import { useNetworkLog } from './hooks/useNetworkLog';
 import {
+  loadCases,
   loadCounters,
   loadProfiles,
   loadRules,
@@ -16,6 +19,7 @@ import {
   loadStories,
   loadStoryEntries,
   removeStory,
+  saveCases,
   saveCounters,
   saveProfiles,
   saveRules,
@@ -25,15 +29,33 @@ import {
   normalizeSettings,
 } from '../shared/storage';
 import {
+  applyCase,
+  newCase,
   newProfile,
   recordedToField,
+  type FormCase,
   type FormProfile,
   type RecordedFieldInput,
+  type ScreenSignature,
 } from '../shared/form';
 import { resolveProfile } from '../shared/resolveProfile';
-import { activeTab, runFill, runPick, runRecord } from '../inject/run';
+import {
+  activeTab,
+  runFill,
+  runPick,
+  runRecord,
+  runScreen,
+  type FillOutcome,
+  type ScreenOutcome,
+} from '../inject/run';
 import { collectGarbage, putBody, trimBodies, usageBytes } from '../shared/bodyStore';
-import { downloadState, exportState, importState, type ImportMode } from '../shared/portable';
+import {
+  downloadState,
+  exportState,
+  importState,
+  type ImportMode,
+  type ImportReport,
+} from '../shared/portable';
 import {
   addEntry,
   exchangeToEntry,
@@ -42,28 +64,29 @@ import {
   type StoryMeta,
 } from '../shared/story';
 import { randomId } from '../shared/ids';
-import {
-  DEFAULT_SETTINGS,
-  STORAGE_KEYS,
-  type MutationRule,
-  type Settings,
-} from '../shared/types';
+import { DEFAULT_SETTINGS, STORAGE_KEYS, type MutationRule, type Settings } from '../shared/types';
 
 export default function SidePanel() {
   const [rules, setRules] = useState<MutationRule[]>([]);
   const [profiles, setProfiles] = useState<FormProfile[]>([]);
   const [profileId, setProfileId] = useState<string | undefined>(undefined);
+  const [cases, setCases] = useState<FormCase[]>([]);
+  const [caseId, setCaseId] = useState<string | undefined>(undefined);
+  const [screen, setScreen] = useState<ScreenOutcome | undefined>(undefined);
+  const [screenBusy, setScreenBusy] = useState(false);
   const [counters, setCounters] = useState<Record<string, number>>({});
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [stories, setStories] = useState<StoryMeta[]>([]);
   const [editing, setEditing] = useState<MutationRule | undefined>(undefined);
   const [draft, setDraft] = useState<RuleDraft | undefined>(undefined);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<ReactNode>(null);
   const [recorded, setRecorded] = useState<RecordedFieldInput[] | null>(null);
   const [includeSecrets, setIncludeSecrets] = useState(false);
   const [usage, setUsage] = useState(0);
   const [storageBusy, setStorageBusy] = useState<string | null>(null);
   const [tab, setTab] = useState<TabId>('network');
+  const [mockView, setMockView] = useState<'rules' | 'stories'>('rules');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [ruleFormOpen, setRuleFormOpen] = useState(false);
   const log = useNetworkLog();
 
@@ -73,6 +96,7 @@ export default function SidePanel() {
     void loadStories().then(setStories);
     void loadCounters().then(setCounters);
     void usageBytes().then(setUsage);
+    void loadCases().then(setCases);
     void loadProfiles().then((loaded) => {
       setProfiles(loaded);
       setProfileId((current) => current ?? loaded[0]?.id);
@@ -82,19 +106,18 @@ export default function SidePanel() {
   // Keep the panel in sync if storage is changed elsewhere (another window, import…).
   useEffect(() => {
     if (typeof chrome === 'undefined' || !chrome.storage?.onChanged) return;
-    const listener = (
-      changes: Record<string, chrome.storage.StorageChange>,
-      area: string,
-    ) => {
+    const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area !== 'local') return;
       const ruleChange = changes[STORAGE_KEYS.rules];
       const profileChange = changes[STORAGE_KEYS.profiles];
       const settingsChange = changes[STORAGE_KEYS.settings];
       const storyChange = changes[STORAGE_KEYS.stories];
+      const caseChange = changes[STORAGE_KEYS.cases];
       if (ruleChange) setRules((ruleChange.newValue as MutationRule[]) ?? []);
       if (profileChange) setProfiles((profileChange.newValue as FormProfile[]) ?? []);
       if (settingsChange) setSettings(normalizeSettings(settingsChange.newValue));
       if (storyChange) setStories((storyChange.newValue as StoryMeta[]) ?? []);
+      if (caseChange) setCases((caseChange.newValue as FormCase[]) ?? []);
     };
     chrome.storage.onChanged.addListener(listener);
     return () => chrome.storage.onChanged.removeListener(listener);
@@ -110,6 +133,11 @@ export default function SidePanel() {
     void saveProfiles(next);
   }, []);
 
+  const persistCases = useCallback((next: FormCase[]) => {
+    setCases(next);
+    void saveCases(next);
+  }, []);
+
   const persistSettings = useCallback((next: Settings) => {
     setSettings(next);
     void saveSettings(next);
@@ -122,7 +150,9 @@ export default function SidePanel() {
 
   const handleSubmit = (submitted: RuleDraft) => {
     if (editing) {
-      persistRules(rules.map((rule) => (rule.id === editing.id ? { ...rule, ...submitted } : rule)));
+      persistRules(
+        rules.map((rule) => (rule.id === editing.id ? { ...rule, ...submitted } : rule)),
+      );
       setEditing(undefined);
       setRuleFormOpen(false);
       return;
@@ -133,7 +163,9 @@ export default function SidePanel() {
   };
 
   const toggleRule = (id: string) =>
-    persistRules(rules.map((rule) => (rule.id === id ? { ...rule, isActive: !rule.isActive } : rule)));
+    persistRules(
+      rules.map((rule) => (rule.id === id ? { ...rule, isActive: !rule.isActive } : rule)),
+    );
 
   const deleteRule = (id: string) => {
     persistRules(rules.filter((rule) => rule.id !== id));
@@ -156,8 +188,8 @@ export default function SidePanel() {
     try {
       setStorageBusy(`Importing ${file.name}…`);
       const report = await importState(JSON.parse(await file.text()), mode);
-      showToast(`Imported ${report.rules} rule(s), ${report.profiles} profile(s), ${report.stories} story(ies)`);
-      // Storage listeners re-hydrate rules and profiles; these two are read once.
+      showToast(summarizeImport(report));
+      // Storage listeners re-hydrate rules, profiles and cases; these two are read once.
       void loadStories().then(setStories);
       void loadCounters().then(setCounters);
       refreshUsage();
@@ -186,9 +218,9 @@ export default function SidePanel() {
     showToast(removed > 0 ? `Deleted ${removed} unused body(ies)` : 'Nothing unused to delete');
   };
 
-  const showToast = (message: string) => {
+  const showToast = (message: ReactNode, ms = 2500) => {
     setToast(message);
-    setTimeout(() => setToast(null), 2500);
+    setTimeout(() => setToast(null), ms);
   };
 
   const handleCreateRule = (fromExchange: RuleDraft) => {
@@ -196,6 +228,7 @@ export default function SidePanel() {
     // A fresh object identity is what re-hydrates the form.
     setDraft({ ...fromExchange });
     setRuleFormOpen(true);
+    setMockView('rules');
     setTab('mocks');
     showToast('Draft ready in Mocks — review, then save');
   };
@@ -203,6 +236,7 @@ export default function SidePanel() {
   const editRule = (rule: MutationRule) => {
     setEditing(rule);
     setRuleFormOpen(true);
+    setMockView('rules');
     setTab('mocks');
   };
 
@@ -211,8 +245,13 @@ export default function SidePanel() {
    * store, so re-recording the same response costs nothing and repeat captures of
    * one endpoint become a replay sequence.
    */
-  const saveToStory = async (exchangeIds: string[], target: { storyId?: string; name?: string }) => {
-    const existing = target.storyId ? stories.find((story) => story.id === target.storyId) : undefined;
+  const saveToStory = async (
+    exchangeIds: string[],
+    target: { storyId?: string; name?: string },
+  ) => {
+    const existing = target.storyId
+      ? stories.find((story) => story.id === target.storyId)
+      : undefined;
     const story = existing ?? newStory(target.name?.trim() || `Story ${stories.length + 1}`);
 
     let entries = existing ? await loadStoryEntries(story.id) : [];
@@ -273,9 +312,18 @@ export default function SidePanel() {
   };
 
   const activeProfile = profiles.find((profile) => profile.id === profileId);
+  const profileCases = cases.filter((item) => item.profileId === profileId);
+  const activeCase = profileCases.find((item) => item.id === caseId);
+  /**
+   * What a fill would actually type. The case is folded in here rather than at
+   * the fill site so the preview column and the fill can never disagree about
+   * which values are in play — a case that reads right and fills wrong is the
+   * one failure mode a value editor cannot afford.
+   */
+  const cased = activeProfile ? applyCase(activeProfile, activeCase) : undefined;
   // Preview only: counters are drawn but not persisted until an actual fill.
-  const previewed = activeProfile
-    ? resolveProfile(activeProfile, { counters })
+  const previewed = cased
+    ? resolveProfile(cased, { counters })
     : { fields: [], values: {}, counters, errors: [] };
 
   /**
@@ -293,13 +341,19 @@ export default function SidePanel() {
     }
   };
 
+  const reloadTab = async () => {
+    const browserTab = await targetTab();
+    if (browserTab?.id === undefined) return;
+    await chrome.tabs.reload(browserTab.id);
+  };
+
   const fillForm = async () => {
-    if (!activeProfile) return;
+    if (!cased) return;
     try {
       const browserTab = await targetTab();
       if (browserTab?.id === undefined) return;
 
-      const resolved = resolveProfile(activeProfile, { counters });
+      const resolved = resolveProfile(cased, { counters });
       if (resolved.errors.length > 0) {
         showToast(resolved.errors[0]);
         return;
@@ -307,13 +361,11 @@ export default function SidePanel() {
       const outcome = await runFill(browserTab.id, resolved.fields);
       setCounters(resolved.counters);
       void saveCounters(resolved.counters);
-      rememberProfileForTab(browserTab.url, activeProfile.id);
+      rememberProfileForTab(browserTab.url, cased.id);
 
-      showToast(
-        outcome.misses.length > 0
-          ? `Filled ${outcome.filled.length} · missed ${outcome.misses.join(', ')}`
-          : `Filled ${outcome.filled.length} field(s)`,
-      );
+      const unfilled =
+        outcome.misses.length + outcome.skipped.length + outcome.rejected.length;
+      showToast(<FillSummary outcome={outcome} />, unfilled > 0 ? 6000 : 2500);
     } catch (err) {
       console.error('[Panel] Fill failed:', err);
       showToast('Fill failed — see console');
@@ -408,7 +460,11 @@ export default function SidePanel() {
 
   const duplicateProfile = () => {
     if (!activeProfile) return;
-    const copy = { ...newProfile(`${activeProfile.name} copy`), fields: activeProfile.fields, vars: activeProfile.vars };
+    const copy = {
+      ...newProfile(`${activeProfile.name} copy`),
+      fields: activeProfile.fields,
+      vars: activeProfile.vars,
+    };
     persistProfiles([...profiles, copy]);
     setProfileId(copy.id);
   };
@@ -417,7 +473,93 @@ export default function SidePanel() {
     if (!activeProfile) return;
     const remaining = profiles.filter((profile) => profile.id !== activeProfile.id);
     persistProfiles(remaining);
+    // A case outlives nothing: its selectors are gone with the profile.
+    persistCases(cases.filter((item) => item.profileId !== activeProfile.id));
     setProfileId(remaining[0]?.id);
+  };
+
+  const createCase = () => {
+    if (!activeProfile) return;
+    const created = newCase(activeProfile.id, `Case ${profileCases.length + 1}`);
+    persistCases([...cases, created]);
+    setCaseId(created.id);
+  };
+
+  const updateCase = (next: FormCase) =>
+    persistCases(cases.map((item) => (item.id === next.id ? next : item)));
+
+  /**
+   * A case lifted out of a captured response. It lands selected on the Fill
+   * tab rather than silently in the list — the next thing anyone does with a
+   * case built from a payload is check what it actually holds.
+   */
+  const saveCaseFromPayload = (formCase: FormCase) => {
+    persistCases([...cases, formCase]);
+    setProfileId(formCase.profileId);
+    setCaseId(formCase.id);
+    showToast(
+      <span>
+        Saved <span className="font-semibold">{formCase.name}</span> — open the Fill tab to use it
+      </span>,
+      4000,
+    );
+  };
+
+  const deleteCase = () => {
+    if (!activeCase) return;
+    persistCases(cases.filter((item) => item.id !== activeCase.id));
+    setCaseId(undefined);
+  };
+
+  /**
+   * Which of the known screens the tab is showing. Every profile that carries a
+   * signature is scored, not just the active one — the useful answer when a
+   * fill misses everything is "you are on Service Detail", which needs the
+   * other profiles in the comparison.
+   */
+  const checkScreen = async () => {
+    // A blank row is a signature still being typed, not a text to match: left
+    // in, its `total` could never be reached and no screen would ever be best.
+    const signatures = profiles
+      .map((profile) => ({
+        id: profile.id,
+        texts: (profile.screen?.texts ?? []).map((text) => text.trim()).filter(Boolean),
+      }))
+      .filter((signature) => signature.texts.length > 0);
+    setScreenBusy(true);
+    try {
+      const browserTab = await targetTab();
+      if (browserTab?.id === undefined) return;
+      setScreen(await runScreen(browserTab.id, signatures));
+    } catch (err) {
+      console.error('[Panel] Screen check failed:', err);
+      setScreen(undefined);
+    } finally {
+      setScreenBusy(false);
+    }
+  };
+
+  /**
+   * A wizard step change moves nothing the panel can observe — same URL, same
+   * tab — so the score is refreshed when the Fill tab comes forward rather than
+   * kept live. Cheap, and it is the moment the answer is about to matter.
+   */
+  useEffect(() => {
+    if (tab !== 'fill') return;
+    void checkScreen();
+    // Advancing a wizard step means clicking the page and coming back, and the
+    // return trip is a focus event. It is not every case the chip can go stale
+    // in, but it is the one that happens, and it costs no timer.
+    const refresh = () => void checkScreen();
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, log.tabUrl]);
+
+  const setScreenSignature = (next: ScreenSignature | undefined) => {
+    if (!activeProfile) return;
+    const { screen: _drop, ...rest } = activeProfile;
+    updateProfile(next && next.texts.length > 0 ? { ...rest, screen: next } : rest);
   };
 
   // The worker is torn down whenever it idles; the panel reconnects itself, and
@@ -429,48 +571,52 @@ export default function SidePanel() {
   const activeStories = stories.filter((story) => story.isActive).length;
 
   return (
-    <div className="relative flex h-screen flex-col bg-canvas font-sans text-[13px] text-ink">
-      <header className="shrink-0 border-b border-line bg-surface">
-        <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">
-          <span className="shrink-0 text-[13px] font-semibold tracking-tight">Dev Interceptor</span>
+    <div className="relative flex h-screen flex-col bg-canvas">
+      <header className="shrink-0">
+        <div className="toolbar">
+          <ConnectionDot
+            tabClosed={log.tabClosed}
+            reconnecting={reconnecting}
+            pageConnected={log.pageConnected}
+            recording={log.recording}
+          />
           <span
-            className={`min-w-0 flex-1 truncate font-mono text-[11px] ${
-              log.tabClosed ? 'text-bad' : reconnecting ? 'text-warn' : 'text-faint'
-            }`}
+            className="min-w-0 flex-1 truncate font-mono text-[11px] text-mute"
             title={
               log.tabClosed
                 ? 'The tab this panel belongs to was closed'
                 : reconnecting
                   ? 'The background worker went idle — reconnecting'
-                  : log.tabUrl
+                  : !log.pageConnected
+                    ? 'No content script is running in this tab — reload it'
+                    : log.tabUrl
             }
           >
             {log.tabClosed
               ? 'tab closed'
               : reconnecting
                 ? 'reconnecting…'
-                : (hostOf(log.tabUrl) ?? (log.connected ? 'waiting for the page…' : 'not connected'))}
+                : (hostOf(log.tabUrl) ??
+                  (log.connected ? 'waiting for the page…' : 'not connected'))}
           </span>
           <button
-            onClick={fillForm}
-            disabled={!activeProfile || log.tabClosed}
-            className="btn btn-primary shrink-0"
+            onClick={() => persistSettings({ ...settings, enabled: !settings.enabled })}
+            aria-pressed={settings.enabled}
             title={
-              log.tabClosed
-                ? 'The tab this panel belongs to was closed'
-                : activeProfile
-                  ? `Fill with ${activeProfile.name}`
-                  : 'No profile'
+              settings.enabled
+                ? `Intercepting — ${activeCount} rule(s) and ${activeStories} story(ies) armed`
+                : 'Interception is off — the page sees the real backend'
             }
+            className={`btn btn-sm ${settings.enabled ? 'btn-on' : 'btn-secondary'}`}
           >
-            Fill
+            {settings.enabled ? `Intercepting · ${activeCount + activeStories}` : 'Passthrough'}
           </button>
           <button
-            onClick={() => persistSettings({ ...settings, enabled: !settings.enabled })}
-            title={settings.enabled ? 'Interception is on' : 'Interception is off'}
-            className={`btn shrink-0 ${settings.enabled ? 'btn-secondary text-ok' : 'btn-ghost'}`}
+            onClick={() => setSettingsOpen(true)}
+            className="btn btn-sm btn-icon btn-ghost"
+            title="Settings"
           >
-            {settings.enabled ? `On · ${activeCount}` : 'Off'}
+            <IconSettings />
           </button>
         </div>
 
@@ -481,34 +627,26 @@ export default function SidePanel() {
             { id: 'network', label: 'Network', count: log.entries.length },
             { id: 'mocks', label: 'Mocks', count: activeCount + activeStories },
             { id: 'fill', label: 'Fill', count: activeProfile?.fields.length },
-            { id: 'settings', label: 'Settings' },
           ]}
         />
       </header>
 
-      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
+      <main className="relative flex min-h-0 flex-1 flex-col">
         {tab === 'network' && (
           <NetworkLogCard
             log={log}
-            capturing={log.recording}
             stories={stories}
-            onToggleCapture={() => log.setRecording(!log.recording)}
+            profiles={profiles}
             onCreateRule={handleCreateRule}
+            onSaveCase={saveCaseFromPayload}
+            onReloadTab={() => void reloadTab()}
             onSaveToStory={saveToStory}
           />
         )}
 
-        {tab === 'mocks' && (
-          <>
-            <StoriesCard
-              stories={stories}
-              onUpdate={(story) =>
-                persistStories(stories.map((item) => (item.id === story.id ? story : item)))
-              }
-              onDelete={(storyId) => void deleteStory(storyId)}
-            />
-
-            {ruleFormOpen ? (
+        {tab === 'mocks' &&
+          (ruleFormOpen ? (
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
               <RuleForm
                 editing={editing}
                 initialDraft={draft}
@@ -519,33 +657,87 @@ export default function SidePanel() {
                   setRuleFormOpen(false);
                 }}
               />
-            ) : (
-              <button
-                onClick={() => {
-                  setEditing(undefined);
-                  setRuleFormOpen(true);
-                }}
-                className="btn btn-ghost mb-3 w-full !h-9 border-dashed"
-              >
-                + New rule
-              </button>
-            )}
-
-            <div className="mb-2 flex items-baseline justify-between gap-2 px-0.5">
-              <h2 className="m-0 text-[13px] font-semibold">Rules</h2>
-              <span className="text-[11px] text-faint">{activeCount} active · {rules.length} total</span>
             </div>
-            <RuleList rules={rules} onToggle={toggleRule} onDelete={deleteRule} onEdit={editRule} />
-          </>
-        )}
+          ) : (
+            <>
+              <div className="toolbar">
+                <div className="seg" role="tablist">
+                  <button
+                    role="tab"
+                    aria-selected={mockView === 'rules'}
+                    onClick={() => setMockView('rules')}
+                    className="seg-item"
+                  >
+                    Rules
+                    <span className="tabular-nums">{rules.length}</span>
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={mockView === 'stories'}
+                    onClick={() => setMockView('stories')}
+                    className="seg-item"
+                  >
+                    Stories
+                    <span className="tabular-nums">{stories.length}</span>
+                  </button>
+                </div>
+                <span className="flex-1" />
+                <span className="text-[11px] text-faint tabular-nums">
+                  {mockView === 'rules' ? `${activeCount} active` : `${activeStories} playing`}
+                </span>
+                {mockView === 'rules' && (
+                  <button
+                    onClick={() => {
+                      setEditing(undefined);
+                      setDraft(undefined);
+                      setRuleFormOpen(true);
+                    }}
+                    className="btn btn-sm btn-secondary"
+                  >
+                    <IconPlus />
+                    New rule
+                  </button>
+                )}
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-2">
+                {mockView === 'rules' ? (
+                  <RuleList
+                    rules={rules}
+                    onToggle={toggleRule}
+                    onDelete={deleteRule}
+                    onEdit={editRule}
+                  />
+                ) : (
+                  <StoriesCard
+                    stories={stories}
+                    onUpdate={(story) =>
+                      persistStories(stories.map((item) => (item.id === story.id ? story : item)))
+                    }
+                    onDelete={(storyId) => void deleteStory(storyId)}
+                  />
+                )}
+              </div>
+            </>
+          ))}
 
         {tab === 'fill' && (
           <ProfilesCard
             profiles={profiles}
             activeId={profileId}
+            cases={profileCases}
+            activeCaseId={activeCase?.id}
+            screen={screen}
+            screenBusy={screenBusy}
             preview={previewed.values}
             errors={previewed.errors}
+            disabled={log.tabClosed}
             onSelect={setProfileId}
+            onSelectCase={setCaseId}
+            onCreateCase={createCase}
+            onChangeCase={updateCase}
+            onDeleteCase={deleteCase}
+            onCheckScreen={() => void checkScreen()}
+            onChangeScreen={setScreenSignature}
             onChange={updateProfile}
             onCreate={createProfile}
             onDuplicate={duplicateProfile}
@@ -556,7 +748,7 @@ export default function SidePanel() {
           />
         )}
 
-        {tab === 'settings' && (
+        {settingsOpen && (
           <SettingsCard
             settings={settings}
             usageBytes={usage}
@@ -566,6 +758,7 @@ export default function SidePanel() {
             onImport={(file, mode) => void handleImport(file, mode)}
             onTrim={(maxKb) => void handleTrim(maxKb)}
             onCollectGarbage={() => void handleCollectGarbage()}
+            onClose={() => setSettingsOpen(false)}
           />
         )}
       </main>
@@ -581,12 +774,111 @@ export default function SidePanel() {
       )}
 
       {toast && (
-        <div className="absolute bottom-4 left-1/2 z-20 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-[var(--radius-md)] border border-line-strong bg-raised px-3 py-2 text-[12px] text-ink shadow-[0_8px_24px_oklch(0%_0_0/0.4)]">
+        <div
+          role="status"
+          className="pointer-events-none absolute bottom-4 left-1/2 z-30 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-[var(--radius-lg)] border border-line-strong bg-raised px-3 py-2 text-[12px] text-ink shadow-[var(--shadow-float)]"
+        >
           {toast}
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * Only what actually arrived. A fixed list reads "0 case(s)" on every file
+ * written before cases existed, and a zero standing where the number the user
+ * is checking should be is worse than saying nothing.
+ */
+function summarizeImport(report: ImportReport): string {
+  const parts = [
+    countOf(report.rules, 'rule'),
+    countOf(report.profiles, 'profile'),
+    countOf(report.cases, 'case'),
+    countOf(report.stories, 'story', 'stories'),
+  ].filter(Boolean);
+  return parts.length > 0 ? `Imported ${parts.join(', ')}` : 'Nothing in that file to import';
+}
+
+function countOf(count: number, one: string, many = `${one}s`): string | undefined {
+  return count > 0 ? `${count} ${count === 1 ? one : many}` : undefined;
+}
+
+/**
+ * Four outcomes, four weights. A field the screen answered for — it belongs to
+ * another step, or a checkbox disabled it — is not a fault, and listing it next
+ * to a broken selector is what made a six-step wizard report most of itself as
+ * missing on every fill. A rejection is the loudest of the four because it is
+ * the only one the panel used to count as a success: the write went through and
+ * the app threw it away, so the summary said twelve and the screen showed nine.
+ */
+function FillSummary({ outcome }: { outcome: FillOutcome }) {
+  const hidden = outcome.skipped.filter((entry) => entry.why === 'hidden');
+  const disabled = outcome.skipped.filter((entry) => entry.why === 'disabled');
+  const why = [
+    hidden.length > 0 ? `on another step: ${hidden.map((e) => e.key).join(', ')}` : undefined,
+    disabled.length > 0 ? `disabled right now: ${disabled.map((e) => e.key).join(', ')}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  // The one outcome that can name its own fix: the field wants another format.
+  const refused = outcome.rejected
+    .map((entry) => `${entry.key}: wanted ${entry.wanted}, got ${entry.got}`)
+    .join('\n');
+
+  return (
+    <span className="flex flex-wrap items-baseline gap-x-1.5">
+      <span>
+        Filled <span className="font-semibold tabular-nums">{outcome.filled.length}</span>
+      </span>
+      {outcome.skipped.length > 0 && (
+        <span className="text-faint" title={why}>
+          · skipped <span className="tabular-nums">{outcome.skipped.length}</span>
+        </span>
+      )}
+      {outcome.rejected.length > 0 && (
+        <span className="text-bad" title={`The page did not keep these:\n${refused}`}>
+          · rejected <span className="font-semibold tabular-nums">{outcome.rejected.length}</span>
+        </span>
+      )}
+      {outcome.misses.length > 0 && (
+        <span
+          className="text-warn"
+          title={`Nothing on the page matched: ${outcome.misses.join(', ')}`}
+        >
+          · missed <span className="tabular-nums">{outcome.misses.length}</span>
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * The one place the panel says whether it is actually watching anything: red
+ * while capturing, amber while the worker reconnects, muted when idle.
+ */
+function ConnectionDot({
+  tabClosed,
+  reconnecting,
+  pageConnected,
+  recording,
+}: {
+  tabClosed: boolean;
+  reconnecting: boolean;
+  pageConnected: boolean;
+  recording: boolean;
+}) {
+  // A dark tab is amber even while recording: the button says it is capturing,
+  // and nothing about the page can reach it.
+  const tone = tabClosed
+    ? 'bg-bad'
+    : reconnecting || !pageConnected
+      ? 'bg-warn'
+      : recording
+        ? 'bg-bad animate-[pulse-soft_1.4s_ease-in-out_infinite]'
+        : 'bg-faint';
+  return <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${tone}`} />;
 }
 
 function hostOf(url: string | undefined): string | undefined {

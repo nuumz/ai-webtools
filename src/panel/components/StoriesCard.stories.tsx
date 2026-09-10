@@ -23,6 +23,6 @@ export const StrictOnly: Story = { args: { stories: [{ ...stories[1], isActive: 
 export const Expanded: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.click(canvas.getAllByRole('button', { name: 'Options' })[0]);
+    await userEvent.click(canvas.getAllByRole('button', { name: 'Show options' })[0]);
   },
 };

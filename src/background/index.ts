@@ -10,7 +10,7 @@ import { pullFromSync, pushToSync } from '../shared/sync';
 import { resolveProfile } from '../shared/resolveProfile';
 import { formAgent } from '../inject/formAgent';
 import { DEFAULT_FORM_FILL_FIELDS, STORAGE_KEYS, type MutationRule } from '../shared/types';
-import { armOpenedTab, initRouter } from './router';
+import { armOpenedTab, initRouter, resumeInspect } from './router';
 import { armedTabIds, isArmed, recordingTabIds } from './armedTabs';
 import { restoreFromSession } from './logStore';
 
@@ -66,7 +66,7 @@ chrome.action.onClicked.addListener((tab) => {
 });
 
 chrome.tabs.onActivated.addListener(({ tabId }) => {
-  if (isArmed(tabId)) enablePanel(tabId);
+  if (resumeInspect(tabId)) enablePanel(tabId);
   else disablePanel(tabId);
 });
 

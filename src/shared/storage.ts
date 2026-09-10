@@ -8,7 +8,7 @@ import {
 } from './types';
 import { clampBodyLimit } from './capture';
 import type { StoryEntry, StoryMeta } from './story';
-import { migrateFormFillFields, type FormProfile } from './form';
+import { migrateFormFillFields, type FormCase, type FormProfile } from './form';
 
 const hasChromeStorage = (): boolean =>
   typeof chrome !== 'undefined' && !!chrome.storage?.local;
@@ -104,6 +104,23 @@ export async function loadProfiles(): Promise<FormProfile[]> {
 export async function saveProfiles(profiles: FormProfile[]): Promise<void> {
   if (!hasChromeStorage()) return;
   await chrome.storage.local.set({ [STORAGE_KEYS.profiles]: profiles });
+}
+
+/**
+ * Named value sets for a profile. Local only, like stories and recorded bodies:
+ * a flow's worth of cases would not fit the 100 KB sync quota, and the export
+ * file is how a set of cases travels to a colleague.
+ */
+export async function loadCases(): Promise<FormCase[]> {
+  if (!hasChromeStorage()) return [];
+  const stored = await chrome.storage.local.get([STORAGE_KEYS.cases]);
+  const cases = stored[STORAGE_KEYS.cases];
+  return Array.isArray(cases) ? (cases as FormCase[]) : [];
+}
+
+export async function saveCases(cases: FormCase[]): Promise<void> {
+  if (!hasChromeStorage()) return;
+  await chrome.storage.local.set({ [STORAGE_KEYS.cases]: cases });
 }
 
 export async function loadCounters(): Promise<Record<string, number>> {

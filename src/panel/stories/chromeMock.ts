@@ -11,7 +11,17 @@
  */
 import type { BgToPanel, PanelToBg } from '../../shared/messages';
 import { STORAGE_KEYS, storyEntriesKey } from '../../shared/types';
-import { bodies, exchanges, profiles, rules, settings, stories, tabUrl, usageBytes } from './fixtures';
+import {
+  bodies,
+  exchanges,
+  formCases,
+  profiles,
+  rules,
+  settings,
+  stories,
+  tabUrl,
+  usageBytes,
+} from './fixtures';
 
 const TAB_ID = 1;
 /** Long enough to see the panel's own loading states, short enough not to drag. */
@@ -24,6 +34,7 @@ const seed = (): Store => ({
   [STORAGE_KEYS.rules]: rules,
   [STORAGE_KEYS.stories]: stories,
   [STORAGE_KEYS.profiles]: profiles,
+  [STORAGE_KEYS.cases]: formCases,
   [STORAGE_KEYS.counters]: { user: 41 },
   [storyEntriesKey('st_checkout')]: [],
 });
@@ -45,6 +56,11 @@ export interface ChromeMockOptions {
   recording?: boolean;
   /** Report the pinned tab as gone, so the panel goes read-only. */
   tabClosed?: boolean;
+  /**
+   * Whether a content script is talking to the worker. False stands in for a tab
+   * opened before the extension, or one the browser refuses to script.
+   */
+  pageConnected?: boolean;
 }
 
 export function installChromeMock(options: ChromeMockOptions = {}): void {
@@ -88,6 +104,7 @@ export function installChromeMock(options: ChromeMockOptions = {}): void {
               // that tab, so the stand-in always reports itself as pinned.
               send({ kind: 'tab/changed', tabId: TAB_ID, url: tabUrl, pinned: true });
               send({ kind: 'tab/recording', tabId: TAB_ID, recording });
+              send({ kind: 'tab/pages', tabId: TAB_ID, connected: options.pageConnected ?? true });
               send({ kind: 'log/reset', tabId: TAB_ID, entries, dropped: 0 });
               if (options.tabClosed) send({ kind: 'tab/closed', tabId: TAB_ID });
             }
@@ -107,10 +124,43 @@ export function installChromeMock(options: ChromeMockOptions = {}): void {
       },
     },
     windows: { getCurrent: () => Promise.resolve({ id: 1 }) },
-    tabs: { query: () => Promise.resolve([{ id: TAB_ID, url: tabUrl }]) },
+    tabs: {
+      query: () => Promise.resolve([{ id: TAB_ID, url: tabUrl }]),
+      get: () => Promise.resolve({ id: TAB_ID, url: tabUrl }),
+      reload: () => Promise.resolve(),
+    },
     scripting: {
-      executeScript: () =>
-        Promise.resolve([{ result: { kind: 'fill', filled: ['email', 'password', 'total'], misses: ['city'] } }]),
+      // Answers per command, so a Fill and a screen check in the same story do
+      // not get each other's shape back.
+      executeScript: ({ args }: { args?: [{ kind: string; signatures?: { id: string }[] }] }) => {
+        const command = args?.[0];
+        if (command?.kind === 'screen') {
+          return Promise.resolve([
+            {
+              result: {
+                kind: 'screen',
+                scores: (command.signatures ?? []).map((signature, index) => ({
+                  id: signature.id,
+                  matched: index === 0 ? 2 : 0,
+                  total: 2,
+                })),
+                sample: ['Create your account', 'Billing address', 'Payment'],
+              },
+            },
+          ]);
+        }
+        return Promise.resolve([
+          {
+            result: {
+              kind: 'fill',
+              filled: ['email', 'password', 'total'],
+              misses: ['city'],
+              skipped: [{ key: 'country', why: 'hidden' }],
+              rejected: [{ key: 'qty', wanted: '3', got: '1' }],
+            },
+          },
+        ]);
+      },
     },
     commands: { onCommand: { addListener: () => {} } },
   };

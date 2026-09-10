@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_ITEM_BYTES, chunkRecords, pruneOrigins, stableHash } from '../../src/shared/sync';
+import { MAX_ITEM_BYTES, chunkRecords, mergeMirror, pruneOrigins, stableHash } from '../../src/shared/sync';
 
 describe('stableHash', () => {
   it('ignores key order, so a push and its echo compare equal', () => {
@@ -50,5 +50,35 @@ describe('chunkRecords', () => {
     ]);
     expect(Object.keys(items)).toEqual(['rule:ok']);
     expect(skipped).toEqual(['huge rule']);
+  });
+});
+
+describe('mergeMirror', () => {
+  const rules = (...ids: string[]) => ids.map((id) => ({ id }));
+
+  it('keeps a record sync never carried, so a fat mock is not deleted by a pull', () => {
+    // 'big' was skipped by chunkRecords, so it never reached sync.
+    const merged = mergeMirror('rule:', rules('small', 'big'), rules('small'), new Set(['rule:small']));
+    expect(merged.map((rule) => rule.id)).toEqual(['small', 'big']);
+  });
+
+  it('still applies a real remote deletion', () => {
+    const merged = mergeMirror('rule:', rules('a', 'b'), rules('a'), new Set(['rule:a', 'rule:b']));
+    expect(merged.map((rule) => rule.id)).toEqual(['a']);
+  });
+
+  it('deletes nothing before this device has ever pushed', () => {
+    const merged = mergeMirror('rule:', rules('a', 'b'), rules('c'), undefined);
+    expect(merged.map((rule) => rule.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('takes the remote copy of a record both sides hold, in local order', () => {
+    const merged = mergeMirror(
+      'rule:',
+      [{ id: 'a', label: 'local' }, { id: 'b', label: 'local' }],
+      [{ id: 'b', label: 'remote' }, { id: 'a', label: 'remote' }],
+      new Set(['rule:a', 'rule:b']),
+    );
+    expect(merged).toEqual([{ id: 'a', label: 'remote' }, { id: 'b', label: 'remote' }]);
   });
 });

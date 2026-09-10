@@ -15,7 +15,7 @@ import {
   getEntries,
   restoreFromSession,
 } from './logStore';
-import { armedTabIds, isArmed, isRecording, restoreArmedTabs, setArmed, setRecording } from './armedTabs';
+import { isArmed, isRecording, restoreArmedTabs, setArmed, setRecording } from './armedTabs';
 
 interface PanelState {
   windowId: number;
@@ -67,16 +67,28 @@ export function initRouter(options?: {
   // A pinned panel outlives navigation, so it needs the new address even when
   // the content script never reports in (chrome://, blocked pages).
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-    if (!changeInfo.url) return;
-    tabUrls.set(tabId, changeInfo.url);
-    broadcast(tabId, (port) =>
-      sendToPanel(port, {
-        kind: 'tab/changed',
-        tabId,
-        url: changeInfo.url,
-        pinned: panelPorts.get(port)?.pinned ?? false,
-      }),
-    );
+    if (changeInfo.url) {
+      tabUrls.set(tabId, changeInfo.url);
+      broadcast(tabId, (port) =>
+        sendToPanel(port, {
+          kind: 'tab/changed',
+          tabId,
+          url: changeInfo.url,
+          pinned: panelPorts.get(port)?.pinned ?? false,
+        }),
+      );
+    }
+    if (changeInfo.status === 'loading') {
+      cancelDisarm(tabId);
+    }
+    if (changeInfo.status === 'complete') {
+      void restoreArmedTabs().then(() => {
+        if (isArmed(tabId) || isRecording(tabId) || hasPanelFor(tabId)) {
+          resumeInspectOnReload(tabId);
+          notifyPages(tabId);
+        }
+      });
+    }
   });
 
   chrome.tabs.onRemoved.addListener((tabId) => {
@@ -93,15 +105,62 @@ export function initRouter(options?: {
   });
 
   void restoreArmedTabs().then(() => {
-    for (const id of armedTabIds()) scheduleDisarm(id);
+    for (const tabId of pagePorts.keys()) notifyPages(tabId);
     onArmedChange?.();
   });
 }
 
-/** Call when the user clicks the action: that tab is the one we arm. */
+/** Open Inspect on this tab: arm it and start recording, like opening DevTools. */
 export function armOpenedTab(tabId: number): void {
   cancelDisarm(tabId);
+  const first = !isArmed(tabId);
   setTabArmed(tabId, true);
+  if (first) setTabRecording(tabId, true);
+  void reviveTab(tabId);
+}
+
+/**
+ * A tab that was open before the extension — or whose scripts were orphaned when
+ * it was reloaded — runs no content scripts, and only a page reload brings them
+ * back. Inject them instead, so opening the panel is enough to start seeing
+ * traffic. Both scripts stand down if they are already installed in a frame.
+ */
+async function reviveTab(tabId: number): Promise<void> {
+  if ((pagePorts.get(tabId)?.size ?? 0) > 0) return;
+  const inject = (files: string[], world: chrome.scripting.ExecutionWorld) =>
+    chrome.scripting
+      .executeScript({ target: { tabId, allFrames: true }, files, world })
+      .catch(() => undefined);
+
+  // MAIN first, matching the manifest order: the interceptor asks for config on
+  // boot, and the bridge must be the one that answers.
+  await inject(['interceptor.main.js'], 'MAIN');
+  await inject(['bridge.isolated.js'], 'ISOLATED');
+}
+
+/**
+ * The user switched back to a tab. Keep Inspect attached (DevTools does not
+ * drop Network when you leave and return) and re-push scope to the page.
+ * Returns whether the side panel should be shown for this tab.
+ */
+export function resumeInspect(tabId: number): boolean {
+  cancelDisarm(tabId);
+  if (hasPanelFor(tabId) && !isArmed(tabId)) {
+    armOpenedTab(tabId);
+    return true;
+  }
+  if (!isArmed(tabId)) return false;
+  notifyPages(tabId);
+  sendRecording(tabId);
+  return true;
+}
+
+/** Reload is a new document, not "Inspect closed" — keep recording like DevTools. */
+function resumeInspectOnReload(tabId: number): void {
+  cancelDisarm(tabId);
+  if (!hasPanelFor(tabId) && !isArmed(tabId) && !isRecording(tabId)) return;
+  setTabArmed(tabId, true);
+  setTabRecording(tabId, true);
 }
 
 function setTabArmed(tabId: number, next: boolean): void {
@@ -120,6 +179,12 @@ function setTabRecording(tabId: number, next: boolean): void {
   notifyPages(tabId);
   sendRecording(tabId);
   if (changed) onArmedChange?.();
+}
+
+/** Only the flip matters: extra frames on a connected tab say nothing new. */
+function sendPages(tabId: number): void {
+  const connected = (pagePorts.get(tabId)?.size ?? 0) > 0;
+  broadcast(tabId, (port) => sendToPanel(port, { kind: 'tab/pages', tabId, connected }));
 }
 
 function sendRecording(tabId: number): void {
@@ -162,19 +227,29 @@ function handlePagePort(port: chrome.runtime.Port): void {
     frames = new Set();
     pagePorts.set(tabId, frames);
   }
+  const first = frames.size === 0;
   frames.add(port);
-  sendToPage(port, { kind: 'page/armed', armed: isArmed(tabId), recording: isRecording(tabId) });
+  if (first) sendPages(tabId);
+  /*
+   * A reload wakes a terminated worker. Answering before session inspect
+   * state lands tells the page it is not recording and kills capture.
+   */
+  void restoreArmedTabs().then(() => {
+    if (!pagePorts.get(tabId)?.has(port)) return;
+    sendToPage(port, { kind: 'page/armed', armed: isArmed(tabId), recording: isRecording(tabId) });
+  });
 
   port.onDisconnect.addListener(() => {
     frames.delete(port);
-    if (frames.size === 0) pagePorts.delete(tabId);
+    if (frames.size > 0) return;
+    pagePorts.delete(tabId);
+    sendPages(tabId);
   });
 
   port.onMessage.addListener((raw) => {
-    // The worker may have restarted a moment ago: let the session mirror land
-    // before the first capture is folded in, or restoring finds a log that has
-    // already been overwritten with just that one record.
-    void restoreFromSession().then(() => handlePageMessage(tabId, raw as PageToBg));
+    void Promise.all([restoreFromSession(), restoreArmedTabs()]).then(() =>
+      handlePageMessage(tabId, raw as PageToBg),
+    );
   });
 }
 
@@ -187,7 +262,12 @@ function handlePageMessage(tabId: number, message: PageToBg): void {
         // was killed for being idle is not a load, and clearing there would
         // delete a recording the live page is still adding to — while a reload
         // of the same URL is a new document, which the URL alone cannot tell.
-        if (message.fresh) clearTab(tabId);
+        if (message.fresh) {
+          resumeInspectOnReload(tabId);
+          clearTab(tabId);
+        }
+        notifyPages(tabId);
+        sendRecording(tabId);
         broadcast(tabId, (panelPort) => {
           const state = panelPorts.get(panelPort);
           sendToPanel(panelPort, {
@@ -228,7 +308,31 @@ function handlePanelPort(port: chrome.runtime.Port): void {
   port.onDisconnect.addListener(() => {
     const state = panelPorts.get(port);
     panelPorts.delete(port);
-    if (state?.tabId !== undefined && !hasPanelFor(state.tabId)) scheduleDisarm(state.tabId);
+    if (state?.tabId === undefined || hasPanelFor(state.tabId)) return;
+    const inspected = state.tabId;
+    /*
+     * Tab-switch fires onDisconnect before onActivated, so a sync "active tab"
+     * read still sees this tab and would stop recording. Wait, then only close
+     * Inspect if they are still here and the panel did not come back.
+     */
+    setTimeout(() => {
+      if (hasPanelFor(inspected)) return;
+      void chrome.tabs
+        .get(inspected)
+        .then((tab) => {
+          if (hasPanelFor(inspected)) return;
+          if (tab.status === 'loading') return;
+          return chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        })
+        .then((active) => {
+          if (!active) return;
+          const current = Array.isArray(active) ? active[0] : undefined;
+          if (hasPanelFor(inspected)) return;
+          if (current?.id !== undefined && current.id !== inspected) return;
+          scheduleDisarm(inspected);
+        })
+        .catch(() => undefined);
+    }, 500);
   });
 
   port.onMessage.addListener((raw) => {
@@ -304,6 +408,12 @@ async function attachToTab(port: chrome.runtime.Port, tabId: number): Promise<vo
 
   sendToPanel(port, { kind: 'tab/changed', tabId, url, pinned: state.pinned });
   sendToPanel(port, { kind: 'tab/recording', tabId, recording: isRecording(tabId) });
+  // The panel starts out knowing nothing; every later change is a flip it hears about.
+  sendToPanel(port, {
+    kind: 'tab/pages',
+    tabId,
+    connected: (pagePorts.get(tabId)?.size ?? 0) > 0,
+  });
   sendLogReset(port, tabId);
 }
 

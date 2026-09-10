@@ -100,6 +100,7 @@ export const STORAGE_KEYS = {
   settings: 'settings',
   stories: 'stories',
   profiles: 'formProfiles',
+  cases: 'formCases',
   counters: 'counters',
 } as const;
 

@@ -27,6 +27,8 @@ export default async function run() {
     await fetch('/api/stub');
     await fetch('/api/big');
     await fetch('/api/large');
+    // Headers only: the body never ends, and the app carries on with the status.
+    void fetch('/api/dribble').then((res) => res.status);
     await fetch('/api/login', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer super-secret' },
@@ -43,7 +45,7 @@ export default async function run() {
   const captured = await drainCaptures(page);
   const byPath = (path) => captured.filter((x) => x.url.includes(path));
 
-  t.check('one record per request', captured.length, 7);
+  t.check('one record per request', captured.length, 8);
 
   const mutated = byPath('/api/users/1').find((x) => x.transport === 'fetch');
   t.check('mutated response is tagged', mutated?.servedBy, 'mutated');
@@ -77,6 +79,13 @@ export default async function run() {
     JSON.parse(large?.responseBody?.text ?? '{}').rows?.length,
     8000,
   );
+
+  // The row closes when the page has its response. Waiting for the body to end
+  // would leave an SSE channel or a stalled proxy "in progress" for minutes.
+  const dribble = byPath('/api/dribble')[0];
+  t.check('a never-ending body still finishes the row', dribble?.outcome, 'ok');
+  t.check('the row reports the status the app got', dribble?.status, 200);
+  t.check('a half-read body is not stored', dribble?.responseBody, undefined);
 
   const login = byPath('/api/login')[0];
   t.check('sensitive request fields are redacted', JSON.parse(login?.requestBody?.text ?? '{}').password, '«redacted»');

@@ -8,7 +8,8 @@
  */
 import type { CapturedExchange, ExchangeMeta } from '../../shared/capture';
 import { toExchangeMeta } from '../../shared/capture';
-import { newField, newProfile, type FormProfile } from '../../shared/form';
+import { newField, newProfile, type FormCase, type FormProfile } from '../../shared/form';
+import type { ScreenOutcome } from '../../inject/run';
 import { newStory, type StoryMeta } from '../../shared/story';
 import type { NetworkLogState } from '../hooks/useNetworkLog';
 import { DEFAULT_SETTINGS, type MutationRule, type Settings } from '../../shared/types';
@@ -102,6 +103,7 @@ const signup: FormProfile = {
   ...newProfile('Signup — valid'),
   id: 'pf_signup',
   siteScope: `${ORIGIN}/*`,
+  screen: { texts: ['Create your account', 'Billing address'] },
   fields: [
     { ...newField('email'), id: 'f_email', label: 'Email', selectors: [{ strategy: 'testid', value: 'email' }], source: { kind: 'template', value: "qa+{{seq('user')}}@dev.local" } },
     { ...newField('password'), id: 'f_pw', selectors: [{ strategy: 'id', value: 'password' }], source: { kind: 'literal', value: 'hunter2!' } },
@@ -125,6 +127,32 @@ const circular: FormProfile = {
 };
 
 export const profiles: FormProfile[] = [signup, circular, { ...newProfile('Signup — bad card'), id: 'pf_invalid' }];
+
+/** Two cases over one screen: the selectors are defined once, the data twice. */
+export const formCases: FormCase[] = [
+  { id: 'cs_thai', profileId: 'pf_signup', name: 'Thai customer', values: { country: 'Thailand', qty: '3' } },
+  // `city` is deliberately blank — a case that drops it cannot put the form back as found.
+  { id: 'cs_bulk', profileId: 'pf_signup', name: 'Bulk order — 250', values: { qty: '250', city: '' } },
+];
+
+/** Two signatures scored against a page showing the second one. */
+export const screenOnStep: ScreenOutcome = {
+  scores: [
+    { id: 'pf_signup', matched: 2, total: 2 },
+    { id: 'pf_circular', matched: 0, total: 0 },
+  ],
+  best: 'pf_signup',
+  sample: ['Create your account', 'Billing address', 'Payment'],
+};
+
+export const screenElsewhere: ScreenOutcome = {
+  scores: [
+    { id: 'pf_circular', matched: 1, total: 1 },
+    { id: 'pf_signup', matched: 1, total: 2 },
+  ],
+  best: 'pf_circular',
+  sample: ['Confirm and pay', 'Order summary'],
+};
 
 interface ExchangeSeed {
   method: string;
@@ -197,8 +225,24 @@ const snapshot = (text: string, extra: { truncated?: boolean; redacted?: boolean
   redacted: extra.redacted ?? false,
 });
 
+/**
+ * A response the signup profile can actually be built from: six of its eight
+ * fields are in here under two different shapes of nesting, `city` is blank on
+ * purpose, and `meta` carries three values no field wants.
+ */
+const customerPayload = {
+  customer: { email: 'somchai@dev.local', country: 'Thailand', city: '' },
+  order: { qty: 12, price: 149, total: 1788 },
+  meta: { traceId: 'a7f3c1', region: 'apac', retries: 0 },
+};
+
+/** The wrong exchange: a status envelope that happens to carry one field name. */
+const thinPayload = { status: 'OK', requestId: '9f21', ts: 1_735_000_000_000, qty: 1 };
+
 export const bodies = {
   items: { found: true, response: snapshot(pretty(payloads.items)) },
+  customer: { found: true, response: snapshot(pretty(customerPayload)) },
+  thin: { found: true, response: snapshot(pretty(thinPayload)) },
   checkout: {
     found: true,
     request: snapshot(pretty({ coupon: 'SUMMER', password: '«redacted»' }), { redacted: true }),
@@ -243,6 +287,7 @@ export function makeLog(over: Partial<NetworkLogState> = {}): NetworkLogState {
     tabClosed: false,
     recording: true,
     setRecording: () => {},
+    pageConnected: true,
     entries: exchanges,
     dropped: 0,
     bodies: { ex1: bodies.items, ex3: bodies.checkout },

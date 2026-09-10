@@ -45,14 +45,28 @@ const openTab = (label: string): NonNullable<Story['play']> =>
 /** Traffic from the active tab: what the extension saw, and what it served. */
 export const NetworkTab: Story = { play: openTab('Network') };
 
-/** Recorded stories on top, hand-written rules below — rules always win. */
+/** Hand-written rules; the segmented switch flips to recorded stories. */
 export const MocksTab: Story = { play: openTab('Mocks') };
 
 /** Form profiles with their resolved values, ready for Alt+Shift+F. */
 export const FillTab: Story = { play: openTab('Fill') };
 
-/** Backup, cross-device sync and storage housekeeping. */
-export const SettingsTab: Story = { play: openTab('Settings') };
+/** Backup, cross-device sync and storage housekeeping — a sheet over the tabs. */
+/** The Fill tab with a case chosen: values come from the case, selectors do not. */
+export const FillTabWithCase: Story = {
+  play: async (context) => {
+    await openTab('Fill')(context);
+    const canvas = within(context.canvasElement);
+    await userEvent.selectOptions(canvas.getByLabelText('Active case'), 'cs_bulk');
+  },
+};
+
+export const SettingsTab: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole('button', { name: 'Settings' }));
+  },
+};
 
 /**
  * The tab the panel was opened for has gone away: the log stays readable, but
@@ -69,7 +83,22 @@ export const NotRecording: Story = {
   play: openTab('Network'),
 };
 
-/** A wider window, for checking how the two-line log rows reflow. */
+/**
+ * Recording, but no content script runs in the tab — the case that reads as a
+ * quiet app unless the panel says otherwise.
+ */
+export const PageNotConnected: Story = {
+  beforeEach: withChrome({ pageConnected: false, entries: [] }),
+  play: openTab('Network'),
+};
+
+/** A tab that went dark after recording: the rows stay, the warning is a banner. */
+export const PageNotConnectedWithRows: Story = {
+  beforeEach: withChrome({ pageConnected: false }),
+  play: openTab('Network'),
+};
+
+/** A wider window: the log row keeps one line and the path column takes the slack. */
 export const WideViewport: Story = {
   globals: { viewport: { value: 'sidePanelWide' } },
   play: openTab('Network'),

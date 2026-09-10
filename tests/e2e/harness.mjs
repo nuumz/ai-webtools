@@ -43,6 +43,12 @@ export async function startServer() {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(readFileSync('demo/index.html', 'utf8'));
     }
+    // A wizard shaped like the app the extension is used on: several steps
+    // behind one URL, Thai labels, BE dates, conditional and late-loaded fields.
+    if (url.pathname === '/demo/wizard' || url.pathname === '/demo/wizard.html') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      return res.end(readFileSync('demo/wizard.html', 'utf8'));
+    }
     if (url.pathname === '/demo/frame.html') {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(readFileSync('demo/frame.html', 'utf8'));
@@ -66,6 +72,13 @@ export async function startServer() {
     // Large but under the cap: must survive whole, or a stub built from it is broken JSON.
     if (url.pathname === '/api/large') {
       return json({ rows: Array.from({ length: 8000 }, (_, i) => ({ id: i, name: `row ${i}` })) });
+    }
+    // Headers land at once, the body never ends: what a keep-alive proxy, an SSE
+    // channel or a stalled upstream looks like to the page.
+    if (url.pathname === '/api/dribble') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write('{"partial":');
+      return; // deliberately never ended
     }
     if (url.pathname === '/api/error') {
       return json({ message: 'boom' }, 500);
