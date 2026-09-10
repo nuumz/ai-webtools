@@ -2,8 +2,8 @@
 // and responses can be mutated on the fly before the app's framework sees them,
 // and so every exchange can be mirrored to the panel's network log.
 import {
-  MAX_BODY_BYTES,
   MAX_MUTATE_BYTES,
+  clampBodyLimit,
   isCapturableContentType,
   makeBodySnapshot,
   newExchangeId,
@@ -19,6 +19,7 @@ import { randomId } from '../shared/ids';
 import { bodyKeyForHit } from '../shared/story';
 import { onBus, postBus, readStoredConfig } from '../shared/pageBus';
 import {
+  ARMED_FLAG,
   BODY_REPLY_EVENT,
   BODY_REQUEST_EVENT,
   CAPTURE_EVENT,
@@ -48,8 +49,20 @@ function readCaptureFlag(): boolean {
   }
 }
 
+function readArmedFlag(): boolean {
+  try {
+    return sessionStorage.getItem(ARMED_FLAG) === '1';
+  } catch {
+    return false;
+  }
+}
+
 function install(): void {
-  let settings: Settings = { ...DEFAULT_SETTINGS, captureEnabled: readCaptureFlag() };
+  let settings: Settings = {
+    ...DEFAULT_SETTINGS,
+    enabled: false,
+    captureEnabled: false,
+  };
   let activeRules: CompiledRule[] = [];
   let strictMatchers: ((url: string) => boolean)[] = [];
   /** How many times each story entry has answered in THIS frame. */
@@ -62,9 +75,24 @@ function install(): void {
     try {
       const parsed: unknown = JSON.parse(raw);
       const config: PageConfig = Array.isArray(parsed)
-        ? { version: 2, settings: DEFAULT_SETTINGS, rules: parsed as MutationRule[] }
+        ? { version: 2, settings: DEFAULT_SETTINGS, rules: parsed as MutationRule[], armed: true }
         : (parsed as PageConfig);
-      settings = config.settings ?? settings;
+      if (config.armed !== true) {
+        settings = { ...DEFAULT_SETTINGS, enabled: false, captureEnabled: false };
+        activeRules = [];
+        strictMatchers = [];
+        hits.clear();
+        return;
+      }
+      // Merged, not assigned: a config written by an older build (or the bare
+      // v1 array above) carries no body limit, and an undefined limit would
+      // silently disable capping instead of falling back to the default.
+      const incoming = config.settings ?? settings;
+      settings = {
+        ...DEFAULT_SETTINGS,
+        ...incoming,
+        captureBodyLimit: clampBodyLimit(incoming.captureBodyLimit),
+      };
       activeRules = compileRules([...(config.rules ?? []), ...(config.storyRules ?? [])]);
       strictMatchers = (config.strictPatterns ?? []).map(compilePattern);
       hits.clear();
@@ -75,6 +103,9 @@ function install(): void {
 
   const stored = readStoredConfig();
   if (stored) applyConfig(stored);
+  else if (readArmedFlag() && readCaptureFlag()) {
+    settings = { ...settings, captureEnabled: true };
+  }
 
   window.addEventListener(SYNC_EVENT, ((event: CustomEvent<string>) => {
     applyConfig(event.detail ?? '');
@@ -132,7 +163,7 @@ function install(): void {
     }
   };
 
-  const capturing = (): boolean => settings.captureEnabled || readCaptureFlag();
+  const capturing = (): boolean => settings.captureEnabled;
 
   const emit = (exchange: CapturedExchange, immediate = false): void => {
     if (!capturing()) return;
@@ -177,7 +208,9 @@ function install(): void {
   };
 
   const snapshot = (text: string | undefined) =>
-    text === undefined ? undefined : makeBodySnapshot(text, settings.redactKeys);
+    text === undefined
+      ? undefined
+      : makeBodySnapshot(text, settings.redactKeys, settings.captureBodyLimit);
 
   const findMatch = (url: string, method: string): CompiledRule | undefined =>
     settings.enabled ? findRule(activeRules, url, method) : undefined;
@@ -495,7 +528,7 @@ function install(): void {
       // the response, so read it (capped) off the return path and never await it.
       if (isCapturableContentType(response.headers.get('content-type') ?? '')) {
         const clone = response.clone();
-        void readCapped(clone)
+        void readCapped(clone, settings.captureBodyLimit)
           .then((text) => finish(response, 'network', 'ok', text))
           .catch(() => finish(response, 'network', 'ok'));
       } else {
@@ -797,10 +830,11 @@ function install(): void {
     private _readTextForCapture(): string | undefined {
       try {
         const type = this.responseType;
-        if (type === '' || type === 'text') return this.responseText.slice(0, MAX_BODY_BYTES + 1);
+        const limit = settings.captureBodyLimit;
+        if (type === '' || type === 'text') return this.responseText.slice(0, limit + 1);
         if (type === 'json') {
           const value: unknown = this.response;
-          return value === undefined ? undefined : JSON.stringify(value).slice(0, MAX_BODY_BYTES + 1);
+          return value === undefined ? undefined : JSON.stringify(value).slice(0, limit + 1);
         }
         return undefined;
       } catch {
@@ -874,8 +908,8 @@ function install(): void {
   window.XMLHttpRequest = MutatedXHR as unknown as typeof XMLHttpRequest;
 }
 
-/** Reads at most MAX_BODY_BYTES from a response clone, cancelling the rest. */
-async function readCapped(response: Response): Promise<string> {
+/** Reads at most `limit` characters from a response clone, cancelling the rest. */
+async function readCapped(response: Response, limit: number): Promise<string> {
   const body = response.body;
   if (!body) return response.text();
 
@@ -887,7 +921,7 @@ async function readCapped(response: Response): Promise<string> {
       const { done, value } = await reader.read();
       if (done) break;
       text += decoder.decode(value, { stream: true });
-      if (text.length > MAX_BODY_BYTES) {
+      if (text.length > limit) {
         void reader.cancel();
         return text;
       }

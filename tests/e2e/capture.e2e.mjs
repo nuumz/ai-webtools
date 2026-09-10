@@ -84,6 +84,19 @@ export default async function run() {
   t.check('redaction is flagged', login?.requestBody?.redacted, true);
   t.check('authorization header is redacted', login?.requestHeaders?.authorization, '«redacted»');
 
+  // Raising the limit is what makes a multi-megabyte response stubbable at all:
+  // the same body that truncates at the default must arrive whole here.
+  const roomy = await openPage(browser, config({ captureBodyLimit: 4 * 1024 * 1024 }));
+  await roomy.goto(server.base);
+  await roomy.evaluate(() => fetch('/api/big'));
+  const roomyBig = (await drainCaptures(roomy)).find((x) => x.url.includes('/api/big'));
+  t.check('a raised limit keeps a 2 MB body whole', roomyBig?.responseBody?.truncated, false);
+  t.check(
+    'the raised body still parses',
+    JSON.parse(roomyBig?.responseBody?.text ?? '{}').blob?.length,
+    2 * 1024 * 1024,
+  );
+
   // Recording off: rules still apply, nothing is captured.
   const quiet = await openPage(browser, config({ captureEnabled: false }));
   await quiet.goto(server.base);

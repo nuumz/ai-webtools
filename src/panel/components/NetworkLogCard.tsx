@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import ExchangeDetail from './ExchangeDetail';
 import type { ExchangeMeta } from '../../shared/capture';
 import type { StoryMeta } from '../../shared/story';
 import type { NetworkLogState } from '../hooks/useNetworkLog';
 import type { RuleDraft } from './RuleForm';
+import { durationColor, formatClock, formatDuration } from '../format';
 
 const NEW_STORY = '__new__';
 
@@ -58,11 +59,27 @@ export default function NetworkLogCard({
     return [...rows].reverse();
   }, [log.entries, filter]);
 
+  const waiting = visible.some((exchange) => exchange.outcome === 'pending');
+  const [now, setNow] = useState(() => Date.now());
+
+  // A request that has not answered yet is the one whose timing matters most, so
+  // its clock keeps running; nothing ticks once every row has landed.
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(timer);
+  }, [waiting]);
+
+  const slowest = visible.reduce((peak, exchange) => Math.max(peak, elapsedOf(exchange, now)), 0);
+
   return (
     <div className="panel-card flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
         <p className="m-0 text-[11px] text-faint">
           {log.entries.length === 1 ? '1 request' : `${log.entries.length} requests`}
+          {slowest > 0 && (
+            <span className={durationColor(slowest)}> · slowest {formatDuration(slowest)}</span>
+          )}
           {log.dropped > 0 && <span className="text-warn"> · {log.dropped} dropped</span>}
         </p>
         <div className="flex gap-1.5">
@@ -150,8 +167,18 @@ export default function NetworkLogCard({
                       )}
                       {exchange.servedBy !== 'network' && <ServedByChip servedBy={exchange.servedBy} />}
                     </span>
-                    <span className="flex items-center gap-2 pl-[4.6rem] font-mono text-[10px] tabular-nums text-faint">
-                      <span>{exchange.outcome === 'pending' ? 'pending' : `${exchange.durationMs} ms`}</span>
+                    <span className="flex items-center gap-1.5 pl-[4.6rem] font-mono text-[10px] tabular-nums text-faint">
+                      <span title={new Date(exchange.startedAt).toLocaleString()}>
+                        {formatClock(exchange.startedAt)}
+                      </span>
+                      <DurationBar
+                        ms={elapsedOf(exchange, now)}
+                        slowest={slowest}
+                        pending={exchange.outcome === 'pending'}
+                      />
+                      <span className={durationColor(elapsedOf(exchange, now))}>
+                        {formatDuration(elapsedOf(exchange, now))}
+                      </span>
                       {exchange.resBytes > 0 && <span>· {formatBytes(exchange.resBytes)}</span>}
                       {exchange.transport === 'xhr' && <span>· XHR</span>}
                     </span>
@@ -228,4 +255,29 @@ function formatBytes(bytes: number): string {
   if (!bytes) return '';
   if (bytes < 1024) return `${bytes} B`;
   return `${Math.round(bytes / 1024)} KB`;
+}
+
+/** A request still in flight has no duration yet — its clock is the useful number. */
+function elapsedOf(exchange: ExchangeMeta, now: number): number {
+  if (exchange.outcome !== 'pending') return exchange.durationMs;
+  return Math.max(0, now - exchange.startedAt);
+}
+
+/** Length relative to the slowest request on screen: the shape answers "is this the slow one?". */
+function DurationBar({ ms, slowest, pending }: { ms: number; slowest: number; pending: boolean }) {
+  const share = slowest > 0 ? Math.min(1, ms / slowest) : 0;
+  return (
+    <span className="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-raised" aria-hidden>
+      <span
+        className={`block h-full rounded-full ${pending ? 'animate-pulse' : ''} ${barColor(ms)}`}
+        style={{ width: `${Math.max(share * 100, ms > 0 ? 6 : 0)}%` }}
+      />
+    </span>
+  );
+}
+
+function barColor(ms: number): string {
+  if (ms >= 3000) return 'bg-bad';
+  if (ms >= 1000) return 'bg-warn';
+  return 'bg-accent';
 }

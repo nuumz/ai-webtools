@@ -3,7 +3,7 @@
 // traffic up to the service worker.
 import { normalizeSettings } from '../shared/storage';
 import { getBody } from '../shared/bodyStore';
-import { PORT_PAGE, type PageToBg } from '../shared/messages';
+import { PORT_PAGE, type BgToPage, type PageToBg } from '../shared/messages';
 import { originMatches, ruleAppliesToOrigin } from '../shared/match';
 import { DEFAULT_STRICT_PATTERN, entryToRule, type StoryEntry, type StoryMeta } from '../shared/story';
 import { onBus, postBus, writeStoredConfig } from '../shared/pageBus';
@@ -12,6 +12,7 @@ import {
   BODY_REQUEST_EVENT,
   CAPTURE_EVENT,
   CAPTURE_FLAG,
+  ARMED_FLAG,
   REQUEST_EVENT,
   STORAGE_KEYS,
   SYNC_EVENT,
@@ -34,11 +35,25 @@ const readCaptureFlag = (): boolean => {
   }
 };
 
+const readArmedFlag = (): boolean => {
+  try {
+    return sessionStorage.getItem(ARMED_FLAG) === '1';
+  } catch {
+    return false;
+  }
+};
+
 /*
  * Seed recording from the same session flag the interceptor uses. chrome.storage
  * is async, and dropping in-flight rows until it lands is how pending never paints.
+ * Capture only starts if this tab opened the panel and Record is on for it.
  */
-let settings: Settings = { ...normalizeSettings(undefined), captureEnabled: readCaptureFlag() };
+let settings: Settings = {
+  ...normalizeSettings(undefined),
+  captureEnabled: false,
+};
+let armed = readArmedFlag();
+let recording = readArmedFlag() && readCaptureFlag();
 let lastPushed = '';
 let lastCapture = '';
 let syncTimer: ReturnType<typeof setTimeout> | undefined;
@@ -94,9 +109,34 @@ const writeCaptureFlag = (on: boolean): void => {
   }
 };
 
+const writeArmedFlag = (on: boolean): void => {
+  try {
+    sessionStorage.setItem(ARMED_FLAG, on ? '1' : '0');
+  } catch {
+    /* opaque / sandboxed origin */
+  }
+};
+
+const toPageConfig = (config: PageConfig): PageConfig =>
+  armed
+    ? {
+        ...config,
+        armed: true,
+        settings: { ...config.settings, captureEnabled: recording },
+      }
+    : {
+        ...config,
+        armed: false,
+        settings: { ...config.settings, enabled: false, captureEnabled: false },
+        rules: [],
+        storyRules: [],
+        strictPatterns: [],
+      };
+
 const pushConfig = async (): Promise<void> => {
   try {
-    const config = await readConfig();
+    const config = toPageConfig(await readConfig());
+    writeArmedFlag(armed);
     writeCaptureFlag(config.settings.captureEnabled);
     const payload = JSON.stringify(config);
     writeStoredConfig(payload);
@@ -139,6 +179,16 @@ const openPort = (): chrome.runtime.Port | undefined => {
   if (port) return port;
   try {
     const opened = chrome.runtime.connect({ name: PORT_PAGE });
+    opened.onMessage.addListener((raw: unknown) => {
+      if (!raw || typeof raw !== 'object') return;
+      const message = raw as BgToPage;
+      if (message.kind !== 'page/armed') return;
+      if (armed === message.armed && recording === message.recording) return;
+      armed = message.armed;
+      recording = message.recording;
+      lastPushed = '';
+      void pushConfig();
+    });
     opened.onDisconnect.addListener(() => {
       port = undefined;
     });
@@ -187,10 +237,10 @@ const takeToken = (): boolean => {
 
 const forwardCapture = (raw: string): void => {
   /*
-   * Trust the interceptor: it already gated on recording. Gating again here drops
-   * the pending row while this world still has the default captureEnabled=false.
+   * Trust the interceptor for recording, but never forward unless this tab's
+   * Record switch is on.
    */
-  if (!raw || raw === lastCapture) return;
+  if (!armed || !recording || !raw || raw === lastCapture) return;
   let batch: CapturedExchange[];
   try {
     batch = JSON.parse(raw || '[]') as CapturedExchange[];

@@ -59,8 +59,10 @@ export function addExchanges(tabId: number, exchanges: CapturedExchange[]): Exch
   }
 
   // Bodies are what blow the byte budget, and the row is the part the user reads,
-  // so the oldest bodies go first and the list itself survives.
-  for (const entry of log.entries) {
+  // so the oldest bodies go first and the list itself survives. The newest body
+  // is never dropped: with a large capture limit one response can exceed the
+  // whole budget, and that response is exactly the one about to be stubbed.
+  for (const entry of log.entries.slice(0, -1)) {
     if (log.bytes <= MAX_BYTES_PER_TAB) break;
     if (!log.bodies.has(entry.id)) continue;
     dropBodies(log, entry.id);

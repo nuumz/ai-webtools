@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { clampBodyLimit } from '../../shared/capture';
 import type { ImportMode } from '../../shared/portable';
 import type { Settings } from '../../shared/types';
 
@@ -13,7 +14,8 @@ interface Props {
   onCollectGarbage: () => void;
 }
 
-const TRIM_ABOVE_KB = 64;
+/** What the panel offers; any stored value outside the range is clamped on read. */
+const BODY_LIMITS = [64 * 1024, 256 * 1024, 1024 * 1024, 4 * 1024 * 1024, 16 * 1024 * 1024, 32 * 1024 * 1024];
 
 export default function SettingsCard({
   settings,
@@ -68,6 +70,28 @@ export default function SettingsCard({
         </p>
 
         <label className="flex items-center gap-2 border-t border-line pt-3 text-[12px] text-ink">
+          <span className="shrink-0">Capture bodies up to</span>
+          <select
+            value={clampBodyLimit(settings.captureBodyLimit)}
+            onChange={(event) =>
+              onChange({ ...settings, captureBodyLimit: clampBodyLimit(Number(event.target.value)) })
+            }
+            className="field field-sm !w-auto"
+          >
+            {BODY_LIMITS.map((limit) => (
+              <option key={limit} value={limit}>
+                {formatBytes(limit)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="m-0 text-[11px] leading-relaxed text-faint">
+          A response over this size is stored truncated — and a truncated body is broken JSON, so it
+          cannot be turned into a stub or replayed in a story. Raise it for an app with large
+          payloads; the log keeps fewer of them in memory.
+        </p>
+
+        <label className="flex items-center gap-2 border-t border-line pt-3 text-[12px] text-ink">
           <input
             type="checkbox"
             checked={settings.syncEnabled}
@@ -82,8 +106,12 @@ export default function SettingsCard({
         {settings.syncStatus && <p className="m-0 text-[11px] text-warn">{settings.syncStatus}</p>}
 
         <div className="flex flex-wrap gap-1.5 border-t border-line pt-3">
-          <button onClick={() => onTrim(TRIM_ABOVE_KB)} className="btn btn-ghost">
-            Trim bodies over {TRIM_ABOVE_KB} KB
+          <button
+            onClick={() => onTrim(clampBodyLimit(settings.captureBodyLimit) / 1024)}
+            className="btn btn-ghost"
+            title="Drops stored bodies bigger than what this install captures today"
+          >
+            Trim bodies over {formatBytes(clampBodyLimit(settings.captureBodyLimit))}
           </button>
           <button onClick={onCollectGarbage} className="btn btn-ghost">
             Delete unused bodies

@@ -16,6 +16,9 @@ export interface NetworkLogState {
   pinned: boolean;
   /** The pinned tab was closed: the log is still readable, but nothing can act on the page. */
   tabClosed: boolean;
+  /** Record is on for this panel's tab only. */
+  recording: boolean;
+  setRecording: (enabled: boolean) => void;
   entries: ExchangeMeta[];
   dropped: number;
   bodies: Record<string, ExchangeBodies>;
@@ -58,6 +61,7 @@ export function useNetworkLog(): NetworkLogState {
   const [pinnedTabId] = useState(readPinnedTabId);
   const [pinned, setPinned] = useState(pinnedTabId !== undefined);
   const [tabClosed, setTabClosed] = useState(false);
+  const [recording, setRecordingState] = useState(false);
   const [tabId, setTabId] = useState<number | undefined>(pinnedTabId);
   const [tabUrl, setTabUrl] = useState<string | undefined>(undefined);
   const [entries, setEntries] = useState<ExchangeMeta[]>([]);
@@ -116,6 +120,9 @@ export function useNetworkLog(): NetworkLogState {
             break;
           case 'tab/closed':
             setTabClosed(true);
+            break;
+          case 'tab/recording':
+            setRecordingState(message.recording);
             break;
           case 'log/reset':
             setEntries(message.entries);
@@ -209,6 +216,12 @@ export function useNetworkLog(): NetworkLogState {
     });
   }, []);
 
+  const setRecording = useCallback((enabled: boolean) => {
+    setRecordingState(enabled);
+    const port = portRef.current;
+    if (port) send(port, { kind: 'log/record', enabled });
+  }, []);
+
   const clear = useCallback(() => {
     const port = portRef.current;
     if (port) send(port, { kind: 'log/clear' });
@@ -223,6 +236,8 @@ export function useNetworkLog(): NetworkLogState {
     tabUrl,
     pinned,
     tabClosed,
+    recording,
+    setRecording,
     entries,
     dropped,
     bodies,
@@ -234,13 +249,14 @@ export function useNetworkLog(): NetworkLogState {
 
 /**
  * Edge's side panel often is not the "current" window, so getCurrent() binds
- * the log to a window with no tab. Prefer the last focused browser tab.
+ * the log to a window with no tab. Prefer the last focused browser tab, and
+ * pin it — never follow later tab switches.
  */
 async function subscribePanel(port: chrome.runtime.Port): Promise<void> {
   try {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (tab?.windowId !== undefined) {
-      send(port, { kind: 'log/subscribe', windowId: tab.windowId });
+    if (tab?.id !== undefined) {
+      send(port, { kind: 'log/subscribe', tabId: tab.id });
       return;
     }
   } catch {

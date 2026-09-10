@@ -105,6 +105,7 @@ export async function startServer() {
  */
 export async function openPage(browser, config, { bodies = {} } = {}) {
   const page = await browser.newPage();
+  const payload = Array.isArray(config) ? config : { ...config, armed: true };
   await page.addInitScript(([json, bodyJson]) => {
     const storedBodies = JSON.parse(bodyJson);
     window.__captured = [];
@@ -126,7 +127,7 @@ export async function openPage(browser, config, { bodies = {} } = {}) {
         }),
       );
     });
-  }, [JSON.stringify(config), JSON.stringify(bodies)]);
+  }, [JSON.stringify(payload), JSON.stringify(bodies)]);
   await page.addInitScript({ content: readFileSync('dist/interceptor.main.js', 'utf8') });
   return page;
 }

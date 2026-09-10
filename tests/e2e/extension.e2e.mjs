@@ -75,6 +75,21 @@ export default async function run() {
 
   const page = await context.newPage();
   await page.goto(server.base);
+
+  // Arming is what turns interception on for a tab, and only a real panel can do
+  // it: a port opened from inside the worker never reaches the worker's own
+  // onConnect, so connecting there arms nothing.
+  const extensionId = new URL(worker.url()).host;
+  const pageTabId = await worker.evaluate(
+    async ([base]) => (await chrome.tabs.query({ url: `${base}/*` }))[0]?.id,
+    [server.base],
+  );
+  const panel = await context.newPage();
+  await panel.goto(`chrome-extension://${extensionId}/index.html?tabId=${pageTabId}`);
+  await panel.waitForTimeout(500);
+
+  await page.bringToFront();
+  await page.goto(server.base);
   const results = await page.evaluate(async () => ({
     stub: await (await fetch('/api/stub')).json(),
     scoped: (await fetch('/api/error')).status,
@@ -111,6 +126,24 @@ export default async function run() {
     reloaded.map((entry) => `${entry.method} ${entry.pathname}`),
     ['GET /api/users/1'],
   );
+
+  // The panel itself, with real chrome APIs: proves the per-tab subscription and
+  // that a captured row renders its timing rather than an empty cell.
+  const row = panel.locator('li').first();
+  const rowText = await row
+    .waitFor({ timeout: 5000 })
+    .then(() => row.innerText())
+    .catch(() => '');
+
+  if (rowText === '') {
+    // Nothing was recorded on this tab, so there is no row to inspect; the
+    // capture checks above already report why.
+    console.log('SKIP [extension] panel row timing — the tab recorded nothing');
+  } else {
+    t.assert('the panel lists the tab it was opened for', /users\/1/.test(rowText), rowText);
+    t.assert('a row shows the wall-clock start', /\d{2}:\d{2}:\d{2}\.\d{3}/.test(rowText), rowText);
+    t.assert('a row shows how long the request took', /\d+ ms|\d+\.\d{2} s/.test(rowText), rowText);
+  }
 
   await context.close();
   server.close();

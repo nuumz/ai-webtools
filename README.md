@@ -89,10 +89,14 @@ query (`/api/search?type=A` vs `?type=B`) — the generated pattern then pins th
 **Redaction.** `Authorization`, `Cookie` and similar headers are always masked, along with
 any field whose name matches the configurable key list (`password`, `token`, `secret`,
 `citizenId`, `cardNo`, …). Masking happens in the page, before a record reaches the worker,
-so secrets never enter the log. Bodies are truncated at 1 MB and only text/JSON-ish
-content types are stored at all. A truncated body is broken JSON, so the panel refuses to
-build a stub from one and skips it when saving to a story — rather than handing the app a
-mock it cannot parse.
+so secrets never enter the log. Only text/JSON-ish content types are stored at all, and a
+body over the capture limit is stored truncated.
+
+**The capture limit.** Settings → *Capture bodies up to* (64 KB … 32 MB, default 1 MB). It
+is the one setting that decides which responses can become mocks: a truncated body is
+broken JSON, so the panel refuses to build a stub from one and skips it when saving to a
+story, rather than handing the app a payload it cannot parse. Raise it for an app with
+multi-megabyte responses — the worker then holds fewer of them in memory at once.
 
 ## Stories
 

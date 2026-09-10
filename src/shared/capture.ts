@@ -9,12 +9,21 @@
 import { randomId } from './ids';
 
 /**
- * Bodies larger than this are stored truncated. The cap has to clear a real API
- * page of results, because a truncated body is not just a shorter log line: it
- * is broken JSON, and stubbing or replaying it serves the app something it
- * cannot parse.
+ * Default ceiling on a captured body, overridable per install through
+ * `Settings.captureBodyLimit`. A truncated body is not merely a shorter log
+ * line: it is broken JSON, and stubbing or replaying it serves the app
+ * something it cannot parse — so the limit is what decides which responses can
+ * become mocks at all.
  */
-export const MAX_BODY_BYTES = 1024 * 1024;
+export const DEFAULT_BODY_LIMIT = 1024 * 1024;
+/** The range the panel offers; anything stored outside it is clamped back in. */
+export const MIN_BODY_LIMIT = 64 * 1024;
+export const MAX_BODY_LIMIT = 32 * 1024 * 1024;
+
+export function clampBodyLimit(value: unknown): number {
+  const bytes = typeof value === 'number' && Number.isFinite(value) ? value : DEFAULT_BODY_LIMIT;
+  return Math.min(MAX_BODY_LIMIT, Math.max(MIN_BODY_LIMIT, Math.round(bytes)));
+}
 /** Above this, MUTATE_RESPONSE passes through: buffering + reparsing costs more than the mock is worth. */
 export const MAX_MUTATE_BYTES = 5 * 1024 * 1024;
 
@@ -102,10 +111,13 @@ export function newExchangeId(): string {
   return randomId('ex_');
 }
 
-export function truncateText(text: string): { text: string; bytes: number; truncated: boolean } {
+export function truncateText(
+  text: string,
+  limit: number = DEFAULT_BODY_LIMIT,
+): { text: string; bytes: number; truncated: boolean } {
   const bytes = text.length;
-  return bytes > MAX_BODY_BYTES
-    ? { text: text.slice(0, MAX_BODY_BYTES), bytes, truncated: true }
+  return bytes > limit
+    ? { text: text.slice(0, limit), bytes, truncated: true }
     : { text, bytes, truncated: false };
 }
 
@@ -172,8 +184,12 @@ export function redactBody(text: string, keys: string[] = DEFAULT_REDACT_KEYS): 
   return hit ? { text: masked, redacted: true } : { text, redacted: false };
 }
 
-export function makeBodySnapshot(text: string, keys?: string[]): BodySnapshot {
-  const capped = truncateText(text);
+export function makeBodySnapshot(
+  text: string,
+  keys?: string[],
+  limit: number = DEFAULT_BODY_LIMIT,
+): BodySnapshot {
+  const capped = truncateText(text, limit);
   const { text: safe, redacted } = redactBody(capped.text, keys);
   return { text: safe, bytes: capped.bytes, truncated: capped.truncated, redacted };
 }

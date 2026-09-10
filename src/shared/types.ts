@@ -1,5 +1,5 @@
 /** Shared contract between the Side Panel, the bridge and the MAIN-world interceptor. */
-import { DEFAULT_REDACT_KEYS } from './capture';
+import { DEFAULT_BODY_LIMIT, DEFAULT_REDACT_KEYS } from './capture';
 import type { PathOp } from './pathOps';
 
 export type RuleType = 'MUTATE_REQUEST' | 'MUTATE_RESPONSE' | 'STUB';
@@ -57,6 +57,12 @@ export interface Settings {
   redactKeys: string[];
   /** Origin → profile id, so the keyboard shortcut fills with what you last used there. */
   lastProfileByOrigin: Record<string, string>;
+  /**
+   * Ceiling on a captured body, in bytes. It is a setting because a truncated
+   * body cannot be stubbed or replayed — an app whose responses run to several
+   * megabytes needs the whole thing, and an app whose do not should not pay for it.
+   */
+  captureBodyLimit: number;
   /** Mirror settings, rules and profiles through the browser account. */
   syncEnabled: boolean;
   /** Last sync outcome, shown in the panel (quota errors mostly). */
@@ -68,12 +74,18 @@ export const DEFAULT_SETTINGS: Settings = {
   captureEnabled: false,
   redactKeys: DEFAULT_REDACT_KEYS,
   lastProfileByOrigin: {},
+  captureBodyLimit: DEFAULT_BODY_LIMIT,
   syncEnabled: false,
 };
 
 /** What the bridge pushes into the MAIN world on every change. */
 export interface PageConfig {
   version: 2 | 3;
+  /**
+   * Set by the bridge when this tab opened the side panel. Absent/false means
+   * the interceptor must idle: settings and rules from storage are global.
+   */
+  armed?: boolean;
   settings: Settings;
   rules: MutationRule[];
   /** Rule-shaped entries derived from the active stories; always lower priority. */
@@ -108,6 +120,8 @@ export const BODY_REPLY_EVENT = '__DEV_TOOL_BODY_REPLY__';
  * often wins that race.
  */
 export const CAPTURE_FLAG = '__DEV_TOOL_CAPTURE__';
+/** Same-tab session flag so a reload of the armed tab can capture before the worker replies. */
+export const ARMED_FLAG = '__DEV_TOOL_ARMED__';
 
 export const DEFAULT_FORM_FILL_FIELDS: FormFillField[] = [
   { selector: '#email', value: 'tester@dev.local' },

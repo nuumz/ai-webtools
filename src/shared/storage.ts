@@ -6,6 +6,7 @@ import {
   type MutationRule,
   type Settings,
 } from './types';
+import { clampBodyLimit } from './capture';
 import type { StoryEntry, StoryMeta } from './story';
 import { migrateFormFillFields, type FormProfile } from './form';
 
@@ -47,6 +48,7 @@ export function normalizeSettings(raw: unknown): Settings {
       partial.lastProfileByOrigin && typeof partial.lastProfileByOrigin === 'object'
         ? partial.lastProfileByOrigin
         : {},
+    captureBodyLimit: clampBodyLimit(partial.captureBodyLimit),
     syncEnabled: partial.syncEnabled ?? DEFAULT_SETTINGS.syncEnabled,
     ...(partial.syncStatus ? { syncStatus: partial.syncStatus } : {}),
   };

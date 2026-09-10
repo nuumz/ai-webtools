@@ -17,18 +17,23 @@ export type PageToBg =
   | { kind: 'capture/dropped'; count: number };
 
 export type PanelToBg =
-  /** `tabId` pins the panel to the tab it was opened from; `windowId` is the
-   *  unpinned fallback (follow whichever tab is active in that window). */
+  /** `tabId` is the tab that opened the panel and the only one we arm. */
   | { kind: 'log/subscribe'; tabId?: number; windowId?: number }
   /** Traffic alone can leave the worker idle long enough to be killed mid-recording. */
   | { kind: 'panel/ping' }
   | { kind: 'log/clear' }
-  | { kind: 'log/getBody'; exchangeId: string };
+  | { kind: 'log/getBody'; exchangeId: string }
+  /** Record on/off for the panel's pinned tab only. */
+  | { kind: 'log/record'; enabled: boolean };
+
+/** Service worker → page bridge: this tab is (or is no longer) the panel's tab. */
+export type BgToPage = { kind: 'page/armed'; armed: boolean; recording: boolean };
 
 export type BgToPanel =
   | { kind: 'tab/changed'; tabId: number; url?: string; pinned: boolean }
   /** The pinned tab is gone: the panel keeps its log but can no longer act. */
   | { kind: 'tab/closed'; tabId: number }
+  | { kind: 'tab/recording'; tabId: number; recording: boolean }
   | { kind: 'log/reset'; tabId: number; entries: ExchangeMeta[]; dropped: number }
   | { kind: 'log/append'; tabId: number; entries: ExchangeMeta[]; dropped: number }
   | {

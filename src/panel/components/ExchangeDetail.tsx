@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { MAX_BODY_BYTES, type BodySnapshot, type ExchangeMeta } from '../../shared/capture';
+import type { BodySnapshot, ExchangeMeta } from '../../shared/capture';
 import type { HttpMethod } from '../../shared/types';
 import type { RuleDraft } from './RuleForm';
+import { durationColor, formatClock, formatDuration } from '../format';
 import type { ExchangeBodies } from '../hooks/useNetworkLog';
 
 interface Props {
@@ -35,7 +36,7 @@ export default function ExchangeDetail({ exchange, bodies, onLoadBody, onCreateR
     bodies === undefined || responsePayload !== undefined
       ? undefined
       : bodies.response?.truncated
-        ? `Response is larger than ${formatCap()} and was captured truncated — it cannot be stubbed`
+        ? `Response is ${formatBytes(bodies.response.bytes)} — over the capture limit, so only part of it was kept. Raise the limit in Settings and record it again.`
         : 'Response body is not JSON — nothing to stub';
 
   const draft = (type: RuleDraft['type']): RuleDraft => ({
@@ -49,7 +50,13 @@ export default function ExchangeDetail({ exchange, bodies, onLoadBody, onCreateR
   return (
     <div className="space-y-3 border-t border-line bg-inset p-3">
       <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-faint">
-        <span className="tabular-nums">{exchange.durationMs} ms</span>
+        <span className="tabular-nums" title="Started">
+          {formatClock(exchange.startedAt)}
+        </span>
+        <span aria-hidden>·</span>
+        <span className={`tabular-nums font-semibold ${durationColor(exchange.durationMs)}`} title="Time to response">
+          {formatDuration(exchange.durationMs)}
+        </span>
         <span aria-hidden>·</span>
         <span>{exchange.transport.toUpperCase()}</span>
         <span aria-hidden>·</span>
@@ -102,7 +109,9 @@ function BodyBlock({ title, body }: { title: string; body?: BodySnapshot }) {
     <div>
       <p className="mb-1 text-[11px] font-semibold text-mute">
         {title}
-        {body.truncated && <span className="text-warn"> · truncated at {formatCap()}</span>}
+        {body.truncated && (
+          <span className="text-warn"> · truncated — {formatBytes(body.bytes)} on the wire</span>
+        )}
         {body.redacted && <span className="text-accent"> · redacted</span>}
       </p>
       <pre className="code-block max-h-40">
@@ -112,10 +121,10 @@ function BodyBlock({ title, body }: { title: string; body?: BodySnapshot }) {
   );
 }
 
-function formatCap(): string {
-  return MAX_BODY_BYTES >= 1024 * 1024
-    ? `${Math.round(MAX_BODY_BYTES / 1024 / 1024)} MB`
-    : `${Math.round(MAX_BODY_BYTES / 1024)} KB`;
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function parseJson(text?: string): unknown {

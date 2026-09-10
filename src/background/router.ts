@@ -2,6 +2,7 @@
 import {
   PORT_PAGE,
   PORT_PANEL,
+  type BgToPage,
   type BgToPanel,
   type PageToBg,
   type PanelToBg,
@@ -14,6 +15,7 @@ import {
   getEntries,
   restoreFromSession,
 } from './logStore';
+import { armedTabIds, isArmed, isRecording, restoreArmedTabs, setArmed, setRecording } from './armedTabs';
 
 interface PanelState {
   windowId: number;
@@ -27,10 +29,27 @@ interface PanelState {
 }
 
 const panelPorts = new Map<chrome.runtime.Port, PanelState>();
+const pagePorts = new Map<number, Set<chrome.runtime.Port>>();
 /** Last known top-frame URL per tab, learned from `page/hello` (no `tabs` permission needed). */
 const tabUrls = new Map<number, string>();
 
-export function initRouter(): void {
+/*
+ * Panel reconnect after an idle worker is torn down is not "the user closed
+ * the panel". Wait before disarming so a recording tab is not dropped.
+ */
+const DISARM_GRACE_MS = 2500;
+const disarmTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+let onArmedChange: (() => void) | undefined;
+let onTabArmed: ((tabId: number, armed: boolean) => void) | undefined;
+
+export function initRouter(options?: {
+  onArmedChange?: () => void;
+  onTabArmed?: (tabId: number, armed: boolean) => void;
+}): void {
+  onArmedChange = options?.onArmedChange;
+  onTabArmed = options?.onTabArmed;
+
   chrome.runtime.onConnect.addListener((port) => {
     if (port.name === PORT_PAGE) handlePagePort(port);
     else if (port.name === PORT_PANEL) handlePanelPort(port);
@@ -63,16 +82,93 @@ export function initRouter(): void {
   chrome.tabs.onRemoved.addListener((tabId) => {
     tabUrls.delete(tabId);
     clearTab(tabId);
+    cancelDisarm(tabId);
+    pagePorts.delete(tabId);
+    setRecording(tabId, false);
+    if (setArmed(tabId, false)) onArmedChange?.();
     for (const [port, state] of panelPorts) {
       if (state.tabId !== tabId) continue;
       sendToPanel(port, { kind: 'tab/closed', tabId });
     }
   });
+
+  void restoreArmedTabs().then(() => {
+    for (const id of armedTabIds()) scheduleDisarm(id);
+    onArmedChange?.();
+  });
+}
+
+/** Call when the user clicks the action: that tab is the one we arm. */
+export function armOpenedTab(tabId: number): void {
+  cancelDisarm(tabId);
+  setTabArmed(tabId, true);
+}
+
+function setTabArmed(tabId: number, next: boolean): void {
+  const changed = setArmed(tabId, next);
+  if (!next) setRecording(tabId, false);
+  const armed = isArmed(tabId);
+  notifyPages(tabId);
+  onTabArmed?.(tabId, armed);
+  sendRecording(tabId);
+  if (changed) onArmedChange?.();
+}
+
+function setTabRecording(tabId: number, next: boolean): void {
+  if (next && !isArmed(tabId)) setTabArmed(tabId, true);
+  const changed = setRecording(tabId, next);
+  notifyPages(tabId);
+  sendRecording(tabId);
+  if (changed) onArmedChange?.();
+}
+
+function sendRecording(tabId: number): void {
+  const recording = isRecording(tabId);
+  broadcast(tabId, (port) => sendToPanel(port, { kind: 'tab/recording', tabId, recording }));
+}
+
+function cancelDisarm(tabId: number): void {
+  const timer = disarmTimers.get(tabId);
+  if (timer === undefined) return;
+  clearTimeout(timer);
+  disarmTimers.delete(tabId);
+}
+
+function scheduleDisarm(tabId: number): void {
+  cancelDisarm(tabId);
+  disarmTimers.set(
+    tabId,
+    setTimeout(() => {
+      disarmTimers.delete(tabId);
+      if (hasPanelFor(tabId)) return;
+      setTabArmed(tabId, false);
+    }, DISARM_GRACE_MS),
+  );
+}
+
+function hasPanelFor(tabId: number): boolean {
+  for (const state of panelPorts.values()) {
+    if (state.tabId === tabId) return true;
+  }
+  return false;
 }
 
 function handlePagePort(port: chrome.runtime.Port): void {
   const tabId = port.sender?.tab?.id;
   if (tabId === undefined) return;
+
+  let frames = pagePorts.get(tabId);
+  if (!frames) {
+    frames = new Set();
+    pagePorts.set(tabId, frames);
+  }
+  frames.add(port);
+  sendToPage(port, { kind: 'page/armed', armed: isArmed(tabId), recording: isRecording(tabId) });
+
+  port.onDisconnect.addListener(() => {
+    frames.delete(port);
+    if (frames.size === 0) pagePorts.delete(tabId);
+  });
 
   port.onMessage.addListener((raw) => {
     // The worker may have restarted a moment ago: let the session mirror land
@@ -92,7 +188,6 @@ function handlePageMessage(tabId: number, message: PageToBg): void {
         // delete a recording the live page is still adding to — while a reload
         // of the same URL is a new document, which the URL alone cannot tell.
         if (message.fresh) clearTab(tabId);
-        claimOrphanPanels(tabId, message.url);
         broadcast(tabId, (panelPort) => {
           const state = panelPorts.get(panelPort);
           sendToPanel(panelPort, {
@@ -108,6 +203,7 @@ function handlePageMessage(tabId: number, message: PageToBg): void {
       }
       break;
     case 'capture/exchange': {
+      if (!isArmed(tabId) || !isRecording(tabId)) break;
       const entries = addExchanges(tabId, message.exchanges);
       if (entries.length === 0) break;
       const { dropped } = getEntries(tabId);
@@ -117,6 +213,7 @@ function handlePageMessage(tabId: number, message: PageToBg): void {
       break;
     }
     case 'capture/dropped': {
+      if (!isArmed(tabId) || !isRecording(tabId)) break;
       const dropped = addDropped(tabId, message.count);
       broadcast(tabId, (panelPort) =>
         sendToPanel(panelPort, { kind: 'log/append', tabId, entries: [], dropped }),
@@ -128,7 +225,11 @@ function handlePageMessage(tabId: number, message: PageToBg): void {
 
 function handlePanelPort(port: chrome.runtime.Port): void {
   panelPorts.set(port, { windowId: chrome.windows.WINDOW_ID_NONE, pinned: false });
-  port.onDisconnect.addListener(() => panelPorts.delete(port));
+  port.onDisconnect.addListener(() => {
+    const state = panelPorts.get(port);
+    panelPorts.delete(port);
+    if (state?.tabId !== undefined && !hasPanelFor(state.tabId)) scheduleDisarm(state.tabId);
+  });
 
   port.onMessage.addListener((raw) => {
     const message = raw as PanelToBg;
@@ -141,12 +242,15 @@ function handlePanelPort(port: chrome.runtime.Port): void {
         if (message.tabId !== undefined) {
           state.pinned = true;
           state.tabId = message.tabId;
+          armOpenedTab(message.tabId);
           void attachToTab(port, message.tabId);
           break;
         }
         void resolveActiveTab(state.windowId).then((tabId) => {
           if (tabId === undefined) return;
           state.tabId = tabId;
+          state.pinned = true;
+          armOpenedTab(tabId);
           void attachToTab(port, tabId);
         });
         break;
@@ -171,6 +275,10 @@ function handlePanelPort(port: chrome.runtime.Port): void {
         });
         break;
       }
+      case 'log/record':
+        if (state.tabId === undefined) return;
+        setTabRecording(state.tabId, message.enabled);
+        break;
     }
   });
 }
@@ -195,6 +303,7 @@ async function attachToTab(port: chrome.runtime.Port, tabId: number): Promise<vo
   }
 
   sendToPanel(port, { kind: 'tab/changed', tabId, url, pinned: state.pinned });
+  sendToPanel(port, { kind: 'tab/recording', tabId, recording: isRecording(tabId) });
   sendLogReset(port, tabId);
 }
 
@@ -211,25 +320,34 @@ async function resolveActiveTab(windowId: number): Promise<number | undefined> {
   }
 }
 
-/** A panel that never resolved a tab still receives this page's log. */
-function claimOrphanPanels(tabId: number, url: string): void {
-  for (const [port, state] of panelPorts) {
-    if (state.tabId !== undefined) continue;
-    state.tabId = tabId;
-    sendToPanel(port, { kind: 'tab/changed', tabId, url, pinned: state.pinned });
-    sendLogReset(port, tabId);
-  }
-}
-
 function broadcast(tabId: number, send: (port: chrome.runtime.Port) => void): void {
   for (const [port, state] of panelPorts) {
     if (state.tabId === tabId) send(port);
   }
 }
 
+function notifyPages(tabId: number): void {
+  const frames = pagePorts.get(tabId);
+  if (!frames) return;
+  const message: BgToPage = {
+    kind: 'page/armed',
+    armed: isArmed(tabId),
+    recording: isRecording(tabId),
+  };
+  for (const frame of frames) sendToPage(frame, message);
+}
+
 function sendLogReset(port: chrome.runtime.Port, tabId: number): void {
   const { entries, dropped } = getEntries(tabId);
   sendToPanel(port, { kind: 'log/reset', tabId, entries, dropped });
+}
+
+function sendToPage(port: chrome.runtime.Port, message: BgToPage): void {
+  try {
+    port.postMessage(message);
+  } catch {
+    /* port gone */
+  }
 }
 
 function sendToPanel(port: chrome.runtime.Port, message: BgToPanel): void {

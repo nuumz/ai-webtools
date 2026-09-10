@@ -10,11 +10,34 @@ import { pullFromSync, pushToSync } from '../shared/sync';
 import { resolveProfile } from '../shared/resolveProfile';
 import { formAgent } from '../inject/formAgent';
 import { DEFAULT_FORM_FILL_FIELDS, STORAGE_KEYS, type MutationRule } from '../shared/types';
-import { initRouter } from './router';
+import { armOpenedTab, initRouter } from './router';
+import { armedTabIds, isArmed, recordingTabIds } from './armedTabs';
 import { restoreFromSession } from './logStore';
 
 /** The panel document is per tab, so its tab is baked into the URL it is opened with. */
 const PANEL_PATH = 'index.html';
+
+const panelPathFor = (tabId: number): string => `${PANEL_PATH}?tabId=${tabId}`;
+
+const enablePanel = (tabId: number): void => {
+  void chrome.sidePanel
+    .setOptions({ tabId, path: panelPathFor(tabId), enabled: true })
+    .catch((error) => console.error('[DevTool] Error enabling panel:', error));
+};
+
+const disablePanel = (tabId: number): void => {
+  void chrome.sidePanel.setOptions({ tabId, enabled: false }).catch(() => undefined);
+};
+
+const disablePanelOnOtherTabs = (keepTabId: number, windowId?: number): void => {
+  const query: chrome.tabs.QueryInfo = windowId !== undefined ? { windowId } : {};
+  void chrome.tabs.query(query).then((tabs) => {
+    for (const other of tabs) {
+      if (other.id === undefined || other.id === keepTabId) continue;
+      disablePanel(other.id);
+    }
+  });
+};
 
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: false })
@@ -23,26 +46,41 @@ chrome.sidePanel
 chrome.action.onClicked.addListener((tab) => {
   const tabId = tab.id;
   if (tabId === undefined) return;
-  const path = `${PANEL_PATH}?tabId=${tabId}`;
   /*
    * Both calls stay in the gesture's own task: awaiting setOptions first would
    * spend the user gesture that open() requires.
-   * Edge ignores per-tab setOptions/open more often than Chrome — fall back to
-   * the window so the panel still appears; the panel then pins via lastFocused tab.
+   * Never setOptions({ enabled: true }) without a tabId — that makes the panel
+   * follow every tab in the window.
    */
-  void chrome.sidePanel
-    .setOptions({ tabId, path, enabled: true })
-    .catch(() => chrome.sidePanel.setOptions({ path, enabled: true }));
+  void chrome.sidePanel.setOptions({ tabId, path: panelPathFor(tabId), enabled: true });
   void chrome.sidePanel.open({ tabId }).catch((error) => {
     if (tab.windowId !== undefined) {
       void chrome.sidePanel.open({ windowId: tab.windowId });
+      disablePanelOnOtherTabs(tabId, tab.windowId);
       return;
     }
     console.error('[DevTool] Error opening panel:', error);
   });
+  disablePanelOnOtherTabs(tabId, tab.windowId);
+  armOpenedTab(tabId);
 });
 
-initRouter();
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  if (isArmed(tabId)) enablePanel(tabId);
+  else disablePanel(tabId);
+});
+
+chrome.tabs.onCreated.addListener((tab) => {
+  if (tab.id === undefined || isArmed(tab.id)) return;
+  disablePanel(tab.id);
+});
+
+initRouter({
+  onArmedChange: () => void refreshBadge(),
+  onTabArmed: (tabId, armed) => {
+    if (!armed) disablePanel(tabId);
+  },
+});
 void restoreFromSession();
 void pullFromSync();
 
@@ -154,14 +192,18 @@ async function refreshBadge(): Promise<void> {
       : [];
     const active = rules.filter((rule) => rule.isActive).length;
 
+    if (recordingTabIds().length > 0) {
+      await chrome.action.setBadgeText({ text: 'REC' });
+      await chrome.action.setBadgeBackgroundColor({ color: '#dc2626' });
+      return;
+    }
     if (!settings.enabled) {
       await chrome.action.setBadgeText({ text: 'OFF' });
       await chrome.action.setBadgeBackgroundColor({ color: '#64748b' });
       return;
     }
-    if (settings.captureEnabled) {
-      await chrome.action.setBadgeText({ text: 'REC' });
-      await chrome.action.setBadgeBackgroundColor({ color: '#dc2626' });
+    if (armedTabIds().length === 0) {
+      await chrome.action.setBadgeText({ text: '' });
       return;
     }
     await chrome.action.setBadgeText({ text: active > 0 ? String(active) : '' });

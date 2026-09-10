@@ -490,11 +490,9 @@ export default function SidePanel() {
         {tab === 'network' && (
           <NetworkLogCard
             log={log}
-            capturing={settings.captureEnabled}
+            capturing={log.recording}
             stories={stories}
-            onToggleCapture={() =>
-              persistSettings({ ...settings, captureEnabled: !settings.captureEnabled })
-            }
+            onToggleCapture={() => log.setRecording(!log.recording)}
             onCreateRule={handleCreateRule}
             onSaveToStory={saveToStory}
           />
