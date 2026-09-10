@@ -98,6 +98,8 @@
           <div><input class="input" name="issuer" maxlength="30" /></div>
           <div>ผู้บันทึก</div>
           <div id="volatileBox"><input class="input" name="recordedBy" /></div>
+          <div>สาขา</div>
+          <div id="greedyBox"><input class="input" name="branch" /></div>
         </div>
       </div>
 
@@ -200,6 +202,19 @@
         },
         true,
       );
+
+      // An app that handles the gesture itself, in its own capture listener on
+      // window: anything registered after it never sees the pointer event.
+      const greedyBox = document.getElementById('greedyBox');
+      for (const type of ['pointerdown', 'mousedown']) {
+        window.addEventListener(
+          type,
+          (event) => {
+            if (greedyBox.contains(event.target)) event.stopImmediatePropagation();
+          },
+          true,
+        );
+      }
 
       const show = (step) => {
         document.getElementById('customer').hidden = step !== 'customer';

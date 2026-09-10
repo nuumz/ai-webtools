@@ -818,6 +818,8 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
     }
 
     if (command.kind === 'pick') {
+      const pickScope = window as unknown as Record<string, unknown>;
+
       return await new Promise<AgentResult>((resolve) => {
         let settled = false;
 
@@ -862,13 +864,8 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
          * the picker armed forever, which is indistinguishable from a picker
          * that was never injected — the frame just goes quiet.
          */
-        const onDown = (event: MouseEvent | PointerEvent): void => {
+        const take = (element: Element): void => {
           if (settled) return;
-          event.preventDefault();
-          event.stopPropagation();
-          event.stopImmediatePropagation();
-          const element = targetOf(event);
-          if (!element) return;
           try {
             const picked: AgentResult = {
               kind: 'pick',
@@ -888,6 +885,27 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
               url: location.href,
             });
           }
+        };
+
+        const onDown = (event: MouseEvent | PointerEvent): void => {
+          if (settled) return;
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          const element = targetOf(event);
+          if (element) take(element);
+        };
+
+        /**
+         * Last resort for a page that consumes the gesture itself.
+         *
+         * An app with its own capture listener on window can stop the pointer
+         * event before this picker sees it, and then nothing settles. It cannot
+         * stop focus from landing in the field, though — and a field is what
+         * the picker is for.
+         */
+        const onFocus = (event: FocusEvent): void => {
+          if (event.target instanceof Element) take(event.target);
         };
 
         /** Keeps the app from acting on the gesture we already consumed. */
@@ -946,11 +964,14 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          delete (window as unknown as Record<string, unknown>).__DEV_TOOL_PICKING__;
+          // Only if it is still ours: a stale picker retiring late must not
+          // disarm the one that replaced it.
+          if (pickScope.__DEV_TOOL_PICKING__ === marker) delete pickScope.__DEV_TOOL_PICKING__;
           host.remove();
           window.removeEventListener('mousemove', onMove, true);
           window.removeEventListener('pointerdown', onDown, true);
           window.removeEventListener('mousedown', onDown, true);
+          window.removeEventListener('focusin', onFocus, true);
           window.removeEventListener('keydown', onKey, true);
           // The gesture that picked still has a mouseup and a click to come:
           // let those be swallowed, then stop listening.
@@ -965,13 +986,36 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
         // Backstop: never leave a frame's promise pending forever.
         const timer = setTimeout(() => finish({ kind: 'pick', selectors: null }), 60_000);
 
-        // Observable marker: the picker is only live once its listeners are attached.
-        (window as unknown as Record<string, unknown>).__DEV_TOOL_PICKING__ = true;
+        /** Retires this picker, from here or from the one that replaces it. */
+        const marker = (): void => finish({ kind: 'pick', selectors: null });
+
+        /*
+         * One picker per frame, ever.
+         *
+         * A picker that never settled — an earlier session the page swallowed —
+         * is still listening, and because every picker stops the gesture from
+         * reaching anything else, whichever armed FIRST consumes the click and
+         * answers a promise nobody is waiting on. The new pick then looks dead
+         * while its hint is plainly on screen, which is exactly what it did.
+         */
+        const stale = pickScope.__DEV_TOOL_PICKING__;
+        if (typeof stale === 'function') (stale as () => void)();
+
+        // Observable marker: the picker is only live once its listeners are
+        // attached, and it doubles as the handle that retires it.
+        pickScope.__DEV_TOOL_PICKING__ = marker;
         window.addEventListener('mousemove', onMove, true);
         window.addEventListener('pointerdown', onDown, true);
         window.addEventListener('mousedown', onDown, true);
         window.addEventListener('mouseup', swallow, true);
         window.addEventListener('click', swallow, true);
+        // Last resort: an app that consumes the gesture in its own capture
+        // listener still moves focus into the field, and a field is what the
+        // picker is for. Held back at the start so a page that focuses itself
+        // on load cannot answer for the user.
+        setTimeout(() => {
+          if (!settled) window.addEventListener('focusin', onFocus, true);
+        }, 400);
         window.addEventListener('keydown', onKey, true);
         window.addEventListener('message', onMessage);
       });

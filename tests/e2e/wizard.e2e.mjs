@@ -215,7 +215,7 @@ export default async function run() {
       outer.mainFrame().evaluate((id) => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick', sessionId: id }), session),
       app.evaluate((id) => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick', sessionId: id }), session),
     ]);
-    await app.waitForFunction(() => window.__DEV_TOOL_PICKING__ === true);
+    await app.waitForFunction(() => typeof window.__DEV_TOOL_PICKING__ === 'function');
     await app.click('#docNumber');
     const settled = await Promise.race([
       both,

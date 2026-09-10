@@ -37,10 +37,16 @@ export interface FrameReport {
   urls: string[];
 }
 
-function reportOf(results: (AgentResult | undefined)[]): FrameReport {
+/**
+ * `results` carries holes, and they are `null`, not `undefined`: a frame whose
+ * injection produced no value comes back from `executeScript` as `result: null`,
+ * so testing for `undefined` alone let a null straight through to `.kind` and
+ * threw before either a fill or a read could report anything at all.
+ */
+export function reportOf(results: (AgentResult | undefined | null)[]): FrameReport {
   return {
     frames: results.length,
-    answered: results.filter((result) => result !== undefined && result.kind !== 'error').length,
+    answered: results.filter((result) => result != null && result.kind !== 'error').length,
     errors: results.flatMap((result) =>
       result?.kind === 'error' ? [{ message: result.message, url: result.url }] : [],
     ),
@@ -209,6 +215,8 @@ async function execute(
     func: formAgent,
     args: [command],
   });
-  // Frames that cannot be injected (about:blank, sandboxed) simply return nothing.
-  return injected.map((entry) => entry.result as AgentResult | undefined);
+  // Frames that cannot be injected (about:blank, sandboxed) simply return
+  // nothing, which arrives as null; normalise so one absent shape reaches the
+  // callers rather than two.
+  return injected.map((entry) => (entry.result ?? undefined) as AgentResult | undefined);
 }

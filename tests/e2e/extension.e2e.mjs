@@ -193,9 +193,9 @@ export default async function run() {
    * `tab/pages` is how the panel tells a page that never connected — a tab open
    * before the extension, or one Chrome refuses to script — from a quiet one.
    */
-  const pagesFor = (target) =>
+  const pagesFor = (target, waitMs = 1500) =>
     panel.evaluate(
-      ([id]) =>
+      ([id, wait]) =>
         new Promise((resolve) => {
           const port = chrome.runtime.connect({ name: 'devtool.panel' });
           let answer;
@@ -206,12 +206,34 @@ export default async function run() {
           setTimeout(() => {
             port.disconnect();
             resolve(answer);
-          }, 1500);
+          }, wait);
         }),
-      [target],
+      [target, waitMs],
     );
 
   t.check('a live page reports as connected', await pagesFor(pageTabId), true);
+
+  /*
+   * Back/forward cache: a frozen document keeps its port, so the worker posts
+   * into a page that cannot receive and Chrome logs "Unchecked
+   * runtime.lastError" for every message. The bridge hangs up on `pagehide`
+   * and re-opens on `pageshow`; without that, a restored page also reads as
+   * not connected until the reattach backoff catches up.
+   */
+  await page.goto('chrome://version');
+  // Frozen, not gone: the document is intact in the cache but can receive
+  // nothing. Holding its port open is what makes the worker keep posting into
+  // it — and makes this tab claim a live page it no longer has.
+  t.check('a page frozen into the back/forward cache stops claiming to be connected', await pagesFor(pageTabId), false);
+
+  await page.goBack();
+  await page.waitForLoadState('domcontentloaded');
+  const restored = await page.evaluate(() => performance.getEntriesByType('navigation')[0]?.type);
+  if (restored !== 'back_forward') {
+    console.log(`SKIP [extension] bfcache — navigation type was "${restored}"`);
+  } else {
+    t.check('and it is connected again once restored', await pagesFor(pageTabId), true);
+  }
 
   const darkTab = await context.newPage();
   await darkTab.goto('chrome://version');

@@ -118,7 +118,7 @@ export default async function run() {
   const picking = page.evaluate(() =>
     window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick', sessionId: 'pk_kesc' }),
   );
-  await page.waitForFunction(() => window.__DEV_TOOL_PICKING__ === true);
+  await page.waitForFunction(() => typeof window.__DEV_TOOL_PICKING__ === 'function');
   await page.click('[name=recordedBy]');
   const picked = await within(4000, picking);
   t.check(
@@ -132,6 +132,43 @@ export default async function run() {
     'ผู้บันทึก',
   );
   t.check('and the picker is disarmed afterwards', await page.evaluate(() => window.__DEV_TOOL_PICKING__), undefined);
+
+  // A pick that was never answered is still listening, and every picker stops
+  // the gesture reaching anything else — so the stale one would answer a
+  // promise nobody awaits while the live pick sits there looking dead.
+  const abandoned = page.evaluate(() =>
+    window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick', sessionId: 'pk_stale' }),
+  );
+  await page.waitForFunction(() => typeof window.__DEV_TOOL_PICKING__ === 'function');
+  const live = page.evaluate(() => window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick', sessionId: 'pk_live' }));
+  await page.waitForTimeout(100);
+  await page.click('[name=issuer]');
+  const second = await within(4000, live);
+  t.check(
+    'a second pick retires the first instead of being eaten by it',
+    second === 'timed out' ? 'timed out' : (second.selectors ?? [])[0]?.value,
+    'issuer',
+  );
+  t.check(
+    'and the abandoned one stands down',
+    (await within(4000, abandoned)) === 'timed out' ? 'timed out' : 'settled',
+    'settled',
+  );
+
+  // An app with its own capture listener on window can stop the pointer event
+  // before the picker sees it; focus still lands in the field.
+  const greedy = page.evaluate(() =>
+    window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick', sessionId: 'pk_greedy' }),
+  );
+  await page.waitForFunction(() => typeof window.__DEV_TOOL_PICKING__ === 'function');
+  await page.waitForTimeout(600);
+  await page.click('[name=branch]');
+  const stolen = await within(4000, greedy);
+  t.check(
+    'a page that swallows the gesture cannot stop the pick',
+    stolen === 'timed out' ? 'timed out' : (stolen.selectors ?? [])[0]?.value,
+    'branch',
+  );
 
   // ------------------------------------------------- a frame that cannot answer
 

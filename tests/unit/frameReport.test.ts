@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { explainEmpty } from '../../src/inject/run';
+import { explainEmpty, reportOf } from '../../src/inject/run';
 
 describe('explainEmpty', () => {
   it('names the failure when a frame threw', () => {
@@ -30,5 +30,25 @@ describe('explainEmpty', () => {
     });
     expect(said).toContain('https://app/mutual-fund');
     expect(said).not.toContain('iframe');
+  });
+});
+
+describe('reportOf', () => {
+  it('counts a frame that returned nothing without reading through it', () => {
+    // executeScript reports an uninjectable frame as `result: null`, and null
+    // is not undefined — testing only for undefined threw on `.kind`, which is
+    // what made both Fill and Read the page fail outright.
+    const report = reportOf([
+      null,
+      undefined,
+      { kind: 'record', fields: [], url: 'https://app/step' },
+      { kind: 'error', message: 'TypeError: boom', url: 'https://app/other' },
+    ]);
+    expect(report).toEqual({
+      frames: 4,
+      answered: 1,
+      urls: ['https://app/step'],
+      errors: [{ message: 'TypeError: boom', url: 'https://app/other' }],
+    });
   });
 });
