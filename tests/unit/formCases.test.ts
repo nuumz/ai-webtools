@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyCase, newProfile, type FormCase } from '../../src/shared/form';
+import { applyCase, newProfile, uniqueCaseName, type FormCase } from '../../src/shared/form';
 import { pickScreen } from '../../src/inject/run';
 
 const profile = () => {
@@ -52,5 +52,30 @@ describe('pickScreen', () => {
 
   it('refuses to guess between two equally specific screens', () => {
     expect(pickScreen([{ id: 'a', matched: 1, total: 1 }, { id: 'b', matched: 1, total: 1 }])).toBeUndefined();
+  });
+});
+
+describe('uniqueCaseName', () => {
+  const existing: FormCase[] = [
+    { id: 'a', profileId: 'pf_1', name: 'GET /api/customer', values: {} },
+    { id: 'b', profileId: 'pf_1', name: 'GET /api/customer (2)', values: {} },
+    { id: 'c', profileId: 'pf_2', name: 'GET /api/customer', values: {} },
+  ];
+
+  it('leaves a free name alone', () => {
+    expect(uniqueCaseName(existing, 'pf_1', 'POST /api/session')).toBe('POST /api/session');
+  });
+
+  it('walks past the names already taken in that profile', () => {
+    expect(uniqueCaseName(existing, 'pf_1', 'GET /api/customer')).toBe('GET /api/customer (3)');
+  });
+
+  it('does not collide across profiles', () => {
+    // Another profile's case is a different screen entirely.
+    expect(uniqueCaseName(existing, 'pf_3', 'GET /api/customer')).toBe('GET /api/customer');
+  });
+
+  it('falls back when the name is blank', () => {
+    expect(uniqueCaseName([], 'pf_1', '   ')).toBe('Case');
   });
 });

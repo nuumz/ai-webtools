@@ -5,7 +5,7 @@
     <title>Wizard fixture</title>
     <style>
       body { font: 14px system-ui, sans-serif; margin: 24px; max-width: 900px; }
-      h2 { color: #0d9488; }
+      .title { color: #0d9488; font-size: 20px; font-weight: 700; margin: 12px 0; }
       .steps { display: flex; gap: 16px; list-style: none; padding: 0; }
       .steps li { color: #94a3b8; }
       .steps li[aria-current='step'] { color: #0d9488; font-weight: 600; }
@@ -36,7 +36,7 @@
     </ul>
 
     <section id="customer">
-      <h2>ยืนยันตัวตนลูกค้า</h2>
+      <div class="title">ยืนยันตัวตน<span>ลูกค้า</span></div>
 
       <div class="row">
         <div>
@@ -128,7 +128,7 @@
     </section>
 
     <section id="detail" hidden>
-      <h2>ข้อมูลการทำรายการ</h2>
+      <div class="title">ข้อมูลการทำรายการ</div>
 
       <div class="row summary">
         <div><label>ชื่อกองทุน</label><input value="KEFI3MI" readonly /></div>

@@ -177,6 +177,39 @@ export default async function run() {
     false,
   );
 
+  // ------------------------------------------- the app inside a device simulator
+
+  // The tab holds only the simulator's chrome; the app paints in an iframe, and
+  // very often on another origin. Every answer has to come from the app's frame.
+  for (const [what, query] of [['same-origin', ''], ['cross-origin', '?cross=1']]) {
+    const outer = await browser.newPage();
+    await outer.addInitScript({ path: 'dist/formAgent.js' });
+    await outer.goto(`${server.base}/demo/device${query}`);
+    const app = await (await outer.waitForSelector('#app')).contentFrame();
+    await app.waitForSelector('#docType');
+
+    const inFrame = (frame) =>
+      frame.evaluate((payload) => window.__DEV_TOOL_FORM_AGENT__({ kind: 'screen', signatures: payload }), SIGNATURES);
+
+    t.check(
+      `the app's frame recognises the screen behind a ${what} simulator`,
+      scoreOf(await inFrame(app), 'customer'),
+      '1/1',
+    );
+    t.check(
+      `the simulator's own frame recognises nothing (${what})`,
+      scoreOf(await inFrame(outer.mainFrame()), 'customer'),
+      '0/1',
+    );
+
+    const filled = await app.evaluate(
+      (payload) => window.__DEV_TOOL_FORM_AGENT__({ kind: 'fill', fields: payload }),
+      [{ key: 'issuedBy', selectors: [{ strategy: 'id', value: 'issuedBy' }], value: 'เขตราษฎร์บูรณะ' }],
+    );
+    t.check(`and it is filled there (${what})`, (filled.filled ?? []).join(','), 'issuedBy');
+    await outer.close();
+  }
+
   await browser.close();
   server.close();
   return t.failures;

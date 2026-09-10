@@ -109,6 +109,24 @@ export function newCase(profileId: string, name: string): FormCase {
   return { id: randomId('cs_'), profileId, name, values: {} };
 }
 
+/**
+ * A name that is not already taken in this profile. Saving twice from the same
+ * exchange must never overwrite a case someone has since edited, but two rows
+ * reading `GET /api/customer` in the picker are unusable — so the second one
+ * says so instead.
+ */
+export function uniqueCaseName(existing: Iterable<FormCase>, profileId: string, base: string): string {
+  const taken = new Set(
+    [...existing].filter((entry) => entry.profileId === profileId).map((entry) => entry.name),
+  );
+  const wanted = base.trim() || 'Case';
+  if (!taken.has(wanted)) return wanted;
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${wanted} (${suffix})`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
 /** The values a case would type, as the fill actually sees them. */
 export function applyCase(profile: FormProfile, formCase: FormCase | undefined): FormProfile {
   if (!formCase) return profile;

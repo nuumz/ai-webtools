@@ -45,6 +45,11 @@ export async function startServer() {
     }
     // A wizard shaped like the app the extension is used on: several steps
     // behind one URL, Thai labels, BE dates, conditional and late-loaded fields.
+    // The wizard as it is really met: inside a device simulator's iframe.
+    if (url.pathname === '/demo/device' || url.pathname === '/demo/device.html') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      return res.end(readFileSync('demo/device.html', 'utf8'));
+    }
     if (url.pathname === '/demo/wizard' || url.pathname === '/demo/wizard.html') {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(readFileSync('demo/wizard.html', 'utf8'));

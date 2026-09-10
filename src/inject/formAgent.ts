@@ -112,6 +112,78 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
     return left === right || left.startsWith(right) || left.endsWith(right);
   }
 
+  /**
+   * The text of an element as a person reads it: an element's own words plus
+   * its visible children, with a break wherever the layout puts one.
+   *
+   * Collecting only childless elements — the obvious walk — loses the text of
+   * any element that also has a child, and a real app writes its step title as
+   * `<div>ยืนยันตัวตน<span>ลูกค้า</span></div>`. The two halves never join, so
+   * the screen it names can never be recognised.
+   */
+  function visibleTextOf(element: Element): string {
+    let out = '';
+    for (const node of element.childNodes) {
+      if (node.nodeType === 3) {
+        out += node.nodeValue ?? '';
+        continue;
+      }
+      if (node.nodeType !== 1) continue;
+      const child = node as Element;
+      if (!isVisible(child)) continue;
+      const display = getComputedStyle(child).display;
+      // Inline runs are one phrase; a block is its own line, so unrelated
+      // neighbours cannot be read as one string.
+      const inline = display.startsWith('inline') || display === 'contents';
+      out += inline ? visibleTextOf(child) : ` \n ${visibleTextOf(child)} \n `;
+    }
+    return out;
+  }
+
+  /** How much this element looks like the name of the screen. */
+  function headingWeight(element: Element, style: CSSStyleDeclaration): number {
+    const semantic =
+      /^H[1-6]$/.test(element.tagName) ||
+      element.tagName === 'LEGEND' ||
+      element.getAttribute('role') === 'heading' ||
+      element.hasAttribute('aria-current');
+    const size = Number.parseFloat(style.fontSize) || 0;
+    const bold = (Number.parseInt(style.fontWeight, 10) || 400) >= 600;
+    return (semantic ? 100 : 0) + size * 2 + (bold ? 5 : 0);
+  }
+
+  /**
+   * Texts worth offering as a screen signature, most prominent first.
+   *
+   * Ranked by how the text is PAINTED, not by its tag: an app that titles its
+   * step with a styled div rather than an h2 would otherwise offer the user
+   * nothing to pick, which reads as the feature being broken.
+   */
+  function headingCandidates(): string[] {
+    const scored: { text: string; weight: number }[] = [];
+    const all = document.body.querySelectorAll('*');
+    const limit = Math.min(all.length, 4000);
+
+    for (let index = 0; index < limit; index += 1) {
+      const element = all[index];
+      if (!isVisible(element)) continue;
+      const text = visibleTextOf(element).replace(/\s+/g, ' ').trim();
+      if (text.length < 2 || text.length > 80) continue;
+      // Only the innermost element that owns the text, never its wrappers.
+      if ([...element.children].some((child) => visibleTextOf(child).replace(/\s+/g, ' ').trim() === text)) {
+        continue;
+      }
+      scored.push({ text, weight: headingWeight(element, getComputedStyle(element)) });
+    }
+
+    const seenTexts = new Set<string>();
+    return scored
+      .sort((left, right) => right.weight - left.weight)
+      .filter((entry) => !seenTexts.has(entry.text) && seenTexts.add(entry.text))
+      .map((entry) => entry.text)
+      .slice(0, 12);
+  }
+
   const CONTROLS = 'input, select, textarea, [contenteditable]';
 
   /**
@@ -633,24 +705,7 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
      * DOM, so matching textContent would report every screen at once — which is
      * the same blindness that made framePattern useless here.
      */
-    const visibleText = (): string => {
-      const parts: string[] = [];
-      const walk = (root: Element): void => {
-        for (const child of root.children) {
-          if (!isVisible(child)) continue;
-          if (child.children.length === 0) {
-            const text = child.textContent?.trim();
-            if (text) parts.push(text);
-          } else {
-            walk(child);
-          }
-        }
-      };
-      walk(document.body);
-      return normalise(parts.join(' \n '));
-    };
-
-    const seen = visibleText();
+    const seen = normalise(visibleTextOf(document.body));
     // A count, not a verdict: two screens can both be present in part, and only
     // the panel knows which of them the user was working on.
     const scores = command.signatures.map((signature) => ({
@@ -659,14 +714,7 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
       total: signature.texts.filter((text) => text.trim()).length,
     }));
 
-    // Headings first: what the user would name the screen after.
-    const sample = [...document.querySelectorAll('h1, h2, h3, [aria-current], legend')]
-      .filter(isVisible)
-      .map((element) => element.textContent?.trim() ?? '')
-      .filter(Boolean)
-      .slice(0, 12);
-
-    return { kind: 'screen', scores, sample };
+    return { kind: 'screen', scores, sample: headingCandidates() };
   }
 
   /** The heading of the block a control sits in, e.g. "ชื่อ-นามสกุล (ไทย)". */
