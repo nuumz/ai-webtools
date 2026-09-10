@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { fn, userEvent, within } from 'storybook/test';
-import { bodies, exchanges, profiles } from '../stories/fixtures';
+import { bodies, exchanges, formCases, profiles } from '../stories/fixtures';
 import ExchangeDetail from './ExchangeDetail';
 
 // Stable across renders: the component asks for bodies from an effect keyed on
@@ -14,6 +14,7 @@ const meta = {
     exchange: exchanges[1],
     bodies: bodies.items,
     profiles,
+    cases: formCases,
     onLoadBody,
     onCreateRule: fn(),
     onSaveCase: fn(),
@@ -71,6 +72,19 @@ export const SaveAsCase: Story = {
 /** One field of eight: the shape of a wrong pick, and the panel says so. */
 export const SaveAsCaseWrongResponse: Story = {
   args: { bodies: bodies.thin },
+  play: openView('Case'),
+};
+
+/**
+ * Saving twice from the same exchange never overwrites the first case, so the
+ * name field opens already carrying the suffix rather than proposing a
+ * duplicate the picker could not tell apart.
+ */
+export const SaveAsCaseNameTaken: Story = {
+  args: {
+    bodies: bodies.customer,
+    cases: [...formCases, { id: 'cs_dup', profileId: profiles[0].id, name: 'GET /api/items', values: {} }],
+  },
   play: openView('Case'),
 };
 

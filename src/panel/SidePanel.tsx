@@ -32,6 +32,7 @@ import {
   applyCase,
   newCase,
   newProfile,
+  uniqueCaseName,
   recordedToField,
   type FormCase,
   type FormProfile,
@@ -480,7 +481,7 @@ export default function SidePanel() {
 
   const createCase = () => {
     if (!activeProfile) return;
-    const created = newCase(activeProfile.id, `Case ${profileCases.length + 1}`);
+    const created = newCase(activeProfile.id, uniqueCaseName(cases, activeProfile.id, 'Case'));
     persistCases([...cases, created]);
     setCaseId(created.id);
   };
@@ -637,6 +638,7 @@ export default function SidePanel() {
             log={log}
             stories={stories}
             profiles={profiles}
+            cases={cases}
             onCreateRule={handleCreateRule}
             onSaveCase={saveCaseFromPayload}
             onReloadTab={() => void reloadTab()}

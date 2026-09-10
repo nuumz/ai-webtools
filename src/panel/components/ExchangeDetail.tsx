@@ -6,12 +6,14 @@ import type { HttpMethod } from '../../shared/types';
 import type { RuleDraft } from './RuleForm';
 import type { ExchangeBodies } from '../hooks/useNetworkLog';
 import { caseFromPayload } from '../../shared/payloadCase';
-import type { FormCase, FormProfile } from '../../shared/form';
+import { uniqueCaseName, type FormCase, type FormProfile } from '../../shared/form';
 
 interface Props {
   exchange: ExchangeMeta;
   bodies?: ExchangeBodies;
   profiles: FormProfile[];
+  /** Every profile's cases, so a suggested name can avoid the ones taken. */
+  cases: FormCase[];
   onLoadBody: (exchangeId: string) => void;
   onCreateRule: (draft: RuleDraft) => void;
   onSaveCase: (formCase: FormCase) => void;
@@ -35,6 +37,7 @@ export default function ExchangeDetail({
   exchange,
   bodies,
   profiles,
+  cases,
   onLoadBody,
   onCreateRule,
   onSaveCase,
@@ -129,6 +132,7 @@ export default function ExchangeDetail({
           <PayloadCase
             key={exchange.id}
             profiles={profiles}
+            cases={cases}
             payload={responsePayload}
             loading={bodies === undefined}
             defaultName={`${exchange.method} ${exchange.pathname}`}
@@ -193,19 +197,26 @@ export default function ExchangeDetail({
  */
 function PayloadCase({
   profiles,
+  cases,
   payload,
   loading,
   defaultName,
   onSave,
 }: {
   profiles: FormProfile[];
+  cases: FormCase[];
   payload: unknown;
   loading: boolean;
   defaultName: string;
   onSave: (formCase: FormCase) => void;
 }) {
   const [profileId, setProfileId] = useState(profiles[0]?.id);
-  const [name, setName] = useState(defaultName);
+  const [name, setName] = useState(() =>
+    uniqueCaseName(cases, profiles[0]?.id ?? '', defaultName),
+  );
+  // Once the user has written a name it is theirs: switching profile re-suggests
+  // only while the field still holds a suggestion.
+  const [named, setNamed] = useState(false);
   const [saved, setSaved] = useState(false);
 
   const profile = profiles.find((entry) => entry.id === profileId);
@@ -227,7 +238,7 @@ function PayloadCase({
     );
   }
 
-  const { formCase, match } = caseFromPayload(profile, payload, name.trim() || defaultName);
+  const { formCase, match } = caseFromPayload(profile, payload, name);
   const total = profile.fields.length;
   // Fewer than half is the shape of a wrong pick, not of a sparse response.
   const thin = total > 0 && match.matched.length * 2 < total;
@@ -240,6 +251,7 @@ function PayloadCase({
           value={profileId ?? ''}
           onChange={(e) => {
             setProfileId(e.target.value);
+            if (!named) setName(uniqueCaseName(cases, e.target.value, defaultName));
             setSaved(false);
           }}
           aria-label="Profile this case belongs to"
@@ -257,6 +269,7 @@ function PayloadCase({
         value={name}
         onChange={(e) => {
           setName(e.target.value);
+          setNamed(true);
           setSaved(false);
         }}
         placeholder="Case name"
@@ -314,7 +327,12 @@ function PayloadCase({
           className="btn btn-sm btn-primary"
           disabled={match.matched.length === 0 || saved}
           onClick={() => {
-            onSave(formCase);
+            // Resolved here, and written back, so the field never shows a name
+            // other than the one that was saved.
+            const settled = uniqueCaseName(cases, profile.id, name);
+            setName(settled);
+            setNamed(true);
+            onSave({ ...formCase, name: settled });
             setSaved(true);
           }}
         >

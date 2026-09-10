@@ -17,6 +17,7 @@ interface Props {
   stories: StoryMeta[];
   /** Passed through: a case saved from a response has to belong to one. */
   profiles: FormProfile[];
+  cases: FormCase[];
   onCreateRule: (draft: RuleDraft) => void;
   onSaveCase: (formCase: FormCase) => void;
   onReloadTab: () => void;
@@ -30,6 +31,7 @@ export default function NetworkLogCard({
   log,
   stories,
   profiles,
+  cases,
   onCreateRule,
   onSaveCase,
   onReloadTab,
@@ -349,6 +351,7 @@ export default function NetworkLogCard({
               exchange={selected}
               bodies={log.bodies[selected.id]}
               profiles={profiles}
+              cases={cases}
               onLoadBody={log.loadBody}
               onCreateRule={onCreateRule}
               onSaveCase={onSaveCase}

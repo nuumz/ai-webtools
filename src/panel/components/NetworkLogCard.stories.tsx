@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { fn, userEvent, within } from 'storybook/test';
-import { exchanges, makeLog, profiles, stories } from '../stories/fixtures';
+import { exchanges, formCases, makeLog, profiles, stories } from '../stories/fixtures';
 import NetworkLogCard from './NetworkLogCard';
 
 const meta = {
@@ -10,6 +10,7 @@ const meta = {
     log: makeLog(),
     stories,
     profiles,
+    cases: formCases,
     onCreateRule: fn(),
     onSaveCase: fn(),
     onReloadTab: fn(),
