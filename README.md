@@ -259,6 +259,7 @@ npm run typecheck
 npm run test:unit      # vitest: expression language, profile resolution, profile picking
 npm run test:e2e       # rule engine, capture, story, form and fault suites (headless)
 npm run test:ext       # loads dist/ as a real extension; needs a display: xvfb-run -a npm run test:ext
+npm run storybook      # the panel components on their own, at localhost:6006
 ```
 
 `demo/index.html` is the form fixture the tests drive (iframe, shadow DOM, dependent
@@ -272,8 +273,27 @@ service worker and both content scripts as self-contained IIFEs, because MV3 con
 scripts cannot be ES modules.
 
 Every push and pull request runs the same commands in CI
-(`.github/workflows/ci.yml`): typecheck, unit tests, build, the headless suites, and the
-loaded-extension suite under `xvfb`.
+(`.github/workflows/ci.yml`): typecheck, unit tests, build, a Storybook build, the
+headless suites, and the loaded-extension suite under `xvfb`.
+
+## Storybook
+
+`npm run storybook` opens every panel component without an extension, a backend or a
+browser tab — which is the only practical way to look at the states that are hard to
+reach by hand: a body that was truncated and redacted, a sync run that hit the 100 KB
+quota, a profile whose formulas reference each other in a circle, a story replaying a
+`PENDING → DONE` sequence.
+
+- Stories sit next to their component (`src/panel/components/*.stories.tsx`), so
+  `npm run typecheck` covers them and a prop change breaks them in the same commit.
+- `src/panel/stories/fixtures.ts` builds its data with the same factories the extension
+  uses (`newStory`, `newProfile`, `toExchangeMeta`) and mirrors the endpoints the e2e
+  harness serves, so the sample traffic matches what a real recording looks like. The
+  field previews in the Fill stories come from running `resolveProfile` for real.
+- `src/panel/stories/chromeMock.ts` installs a stand-in for the `chrome.*` surface the
+  panel touches. Every module guards its chrome access, so this one object is enough to
+  run the whole `SidePanel` — the four tab stories are the real screens, with storage,
+  the log port and the injected form agent all answering.
 
 ## Notes & limits
 

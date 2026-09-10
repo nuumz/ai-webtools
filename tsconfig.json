@@ -2,11 +2,18 @@
   "compilerOptions": {
     "target": "ES2022",
     "useDefineForClassFields": false,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
-    "types": ["chrome", "vite/client"],
+    "types": [
+      "chrome",
+      "vite/client"
+    ],
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -18,5 +25,11 @@
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src", "scripts", "tests/unit", "vite.config.ts"]
+  "include": [
+    "src",
+    "scripts",
+    "tests/unit",
+    "vite.config.ts",
+    ".storybook"
+  ]
 }
