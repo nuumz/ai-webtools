@@ -39,4 +39,12 @@ export const SyncQuotaWarning: Story = {
   },
 };
 
+/**
+ * Raised for an app with large payloads: under the default limit those
+ * responses come back truncated, and a truncated body cannot be stubbed.
+ */
+export const LargeBodyLimit: Story = {
+  args: { settings: { ...settings, captureBodyLimit: 16 * 1024 * 1024 }, usageBytes: 148_000_000 },
+};
+
 export const Busy: Story = { args: { busy: 'Importing…' } };
