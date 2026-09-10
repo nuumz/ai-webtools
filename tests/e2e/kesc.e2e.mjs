@@ -108,6 +108,14 @@ export default async function run() {
     false,
   );
 
+  // ------------------------------------------------- a frame that cannot answer
+
+  // A frame where the agent throws used to return undefined, which the panel
+  // could not tell apart from a page with no fields on it.
+  const broken = await page.evaluate(() => window.__DEV_TOOL_FORM_AGENT__({ kind: 'fill' }));
+  t.check('a frame that fails says so instead of going quiet', broken.kind, 'error');
+  t.check('and it names the frame it failed in', broken.url.includes('/demo/kesc'), true);
+
   await browser.close();
   server.close();
   return t.failures;

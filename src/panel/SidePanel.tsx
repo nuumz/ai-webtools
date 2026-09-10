@@ -44,6 +44,7 @@ import {
   activeTab,
   runFill,
   runPick,
+  explainEmpty,
   runRecord,
   runScreen,
   type FillOutcome,
@@ -433,16 +434,18 @@ export default function SidePanel() {
       const found = await runRecord(browserTab.id, secrets);
       // An empty array is truthy, so without this the dialog opened with nothing
       // in it and the button read as broken rather than as having found nothing.
-      if (found.length === 0) {
+      if (found.fields.length === 0) {
+        // Which of the three reasons it was is the whole answer here: an empty
+        // page, an agent that threw, and frames that never ran read the same.
+        const why = explainEmpty(found);
         showToast(
-          secrets
-            ? 'Nothing to read — this page shows no fields the agent can see.'
-            : 'Nothing to read here. Password fields are skipped unless you ask for them.',
-          4000,
+          secrets ? why : `${why} Password fields are skipped unless you ask for them.`,
+          6000,
         );
+        console.warn('[Panel] Read the page found nothing:', found);
         return;
       }
-      setRecorded(found);
+      setRecorded(found.fields);
     } catch (err) {
       console.error('[Panel] Record failed:', err);
       showToast('Record failed — see console');

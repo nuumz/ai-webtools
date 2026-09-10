@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { applyCase, newProfile, uniqueCaseName, type FormCase } from '../../src/shared/form';
+import {
+  applyCase,
+  newProfile,
+  recordedToField,
+  uniqueCaseName,
+  uniqueKey,
+  type FormCase,
+} from '../../src/shared/form';
 import { pickScreen } from '../../src/inject/run';
 
 const profile = () => {
@@ -77,5 +84,43 @@ describe('uniqueCaseName', () => {
 
   it('falls back when the name is blank', () => {
     expect(uniqueCaseName([], 'pf_1', '   ')).toBe('Case');
+  });
+});
+
+
+describe('uniqueKey on a form with no Latin in it', () => {
+  it('names a field after the caption a person reads', () => {
+    // The bank's dropdowns and dates carry neither name nor id, so the Thai
+    // caption is the only handle there is. Dropping it made every such field
+    // `field`, `field2`, `field3` — indistinguishable in a case or a payload.
+    expect(uniqueKey('ประเภทเอกสารสำคัญ', [])).toBe('ประเภทเอกสารสำคัญ');
+  });
+
+  it('still tells two Thai fields apart', () => {
+    const keys: string[] = [];
+    for (const caption of ['สัญชาติ', 'สัญชาติ']) keys.push(uniqueKey(caption, keys));
+    expect(keys).toEqual(['สัญชาติ', 'สัญชาติ2']);
+  });
+
+  it('leaves a Latin identifier exactly as it was', () => {
+    expect(uniqueKey('firstNameTh', [])).toBe('firstNameTh');
+    expect(uniqueKey('Email address', [])).toBe('emailAddress');
+  });
+
+  it('prefers the markup handle over the caption when there is one', () => {
+    // `docNo` matches a payload; `เลขที่เอกสารสำคัญ` does not.
+    const built = recordedToField(
+      { selectors: [{ strategy: 'name', value: 'docNo' }], value: '3-1', label: 'เลขที่เอกสารสำคัญ' },
+      [],
+    );
+    expect(built.key).toBe('docNo');
+  });
+
+  it('falls back to the caption when the markup gives no handle', () => {
+    const built = recordedToField(
+      { selectors: [{ strategy: 'label', value: 'ประเภทเอกสารสำคัญ' }], value: 'บัตรประชาชน', label: 'ประเภทเอกสารสำคัญ' },
+      [],
+    );
+    expect(built.key).toBe('ประเภทเอกสารสำคัญ');
   });
 });

@@ -190,7 +190,17 @@ export function describeSelector(selectors: FieldSelector[]): string {
 /** A field key that is safe to reference from an expression and not already taken. */
 export function uniqueKey(base: string, existing: Iterable<string>): string {
   const taken = new Set(existing);
-  const words = base.trim().split(/[^A-Za-z0-9]+/).filter(Boolean);
+  /*
+   * Letters in any script, not just Latin. A widget the markup gives no name to
+   * — the bank's dropdowns and dates have neither name nor id — is known only
+   * by the Thai caption printed beside it, and forcing that through a Latin
+   * filter turned every one of them into `field`, `field2`, `field3`: three
+   * fields no one can tell apart in a case, in an export, or against a payload.
+   *
+   * Marks are letters here: Thai vowels and tone marks are `\p{M}`, so keeping
+   * only `\p{L}` silently rewrites the word — สัญชาติ came out as สญชาต.
+   */
+  const words = base.trim().split(/[^\p{L}\p{N}\p{M}]+/u).filter(Boolean);
   /*
    * Lowercasing the whole leading word flattens an attribute name that was
    * already an identifier — `firstNameTh` became `firstnameth`, which is what a
@@ -203,7 +213,7 @@ export function uniqueKey(base: string, existing: Iterable<string>): string {
   const camel = words
     .map((word, index) => (index === 0 ? lowerLead(word) : word[0].toUpperCase() + word.slice(1).toLowerCase()))
     .join('');
-  const cleaned = camel.replace(/^[0-9]+/, '') || 'field';
+  const cleaned = camel.replace(/^\p{N}+/u, '') || 'field';
 
   if (!taken.has(cleaned)) return cleaned;
   for (let suffix = 2; ; suffix += 1) {

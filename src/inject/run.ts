@@ -16,7 +16,39 @@ import {
   type SkippedField,
 } from './formAgent';
 
-export interface FillOutcome {
+/** A frame where the agent threw, kept so a silent result can be explained. */
+export interface FrameFailure {
+  message: string;
+  url: string;
+}
+
+/**
+ * What the tab answered, beyond the answer itself.
+ *
+ * `frames` is how many frames ran the agent at all: on a page that runs inside
+ * a device simulator that is at least two, and a count of one means the app's
+ * own frame never answered.
+ */
+export interface FrameReport {
+  frames: number;
+  answered: number;
+  errors: FrameFailure[];
+  /** The frames that answered, so it is visible whether the app's own one did. */
+  urls: string[];
+}
+
+function reportOf(results: (AgentResult | undefined)[]): FrameReport {
+  return {
+    frames: results.length,
+    answered: results.filter((result) => result !== undefined && result.kind !== 'error').length,
+    errors: results.flatMap((result) =>
+      result?.kind === 'error' ? [{ message: result.message, url: result.url }] : [],
+    ),
+    urls: results.flatMap((result) => (result?.kind === 'record' ? [result.url] : [])),
+  };
+}
+
+export interface FillOutcome extends FrameReport {
   filled: string[];
   /** A selector that found nothing anywhere: the field is genuinely broken. */
   misses: string[];
@@ -46,6 +78,7 @@ export async function runFill(tabId: number, fields: ResolvedFillField[]): Promi
   // A frame that filled it outranks a frame that could not.
   const explained = (key: string) => skipped.has(key) || rejected.has(key);
   return {
+    ...reportOf(results),
     filled: [...filled],
     skipped: [...skipped.values()].filter((entry) => !filled.has(entry.key)),
     rejected: [...rejected.values()].filter((entry) => !filled.has(entry.key)),
@@ -114,13 +147,40 @@ export function pickScreen(scores: ScreenScore[]): string | undefined {
   return complete[0].id;
 }
 
-export async function runRecord(tabId: number, includeSecrets: boolean): Promise<RecordedField[]> {
+export interface RecordOutcome extends FrameReport {
+  fields: RecordedField[];
+}
+
+export async function runRecord(tabId: number, includeSecrets: boolean): Promise<RecordOutcome> {
   const results = await execute(tabId, { kind: 'record', includeSecrets });
   const fields: RecordedField[] = [];
   for (const result of results) {
     if (result?.kind === 'record') fields.push(...result.fields);
   }
-  return fields;
+  return { ...reportOf(results), fields };
+}
+
+/**
+ * Why a command came back with nothing.
+ *
+ * A page with no fields, an agent that threw, and a tab whose frames never ran
+ * all look identical from the panel — this is what tells them apart, in words
+ * the user can act on.
+ */
+export function explainEmpty(report: FrameReport): string {
+  if (report.errors.length > 0) {
+    const first = report.errors[0];
+    return `The agent failed in ${report.errors.length} of ${report.frames} frame(s): ${first.message}`;
+  }
+  if (report.frames <= 1) {
+    return 'Only the top frame answered. If the app runs in an iframe, reload the tab and try again.';
+  }
+  if (report.urls.length > 1) {
+    // Naming them is what settles "did it even look at the app?", which is the
+    // first question when the page is plainly full of fields.
+    return `Read ${report.urls.length} frames and found no fields: ${report.urls.join(', ')}`;
+  }
+  return `Nothing to read in ${report.answered} frame(s) — no fields the agent can see.`;
 }
 
 export interface PickOutcome {
