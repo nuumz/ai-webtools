@@ -87,7 +87,11 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
   function isUsable(element: Element): boolean {
     if (!isVisible(element)) return false;
     const control = element as HTMLInputElement;
-    return !control.disabled && !control.readOnly;
+    if (control.disabled || control.readOnly) return false;
+    // A segmented field is usable while any one of its boxes still is: ticking
+    // ตลอดชีพ disables the segments, not the box that holds them.
+    const segments = segmentsOf(element);
+    return segments.length === 0 || segments.some((segment) => !segment.disabled && !segment.readOnly);
   }
 
   /**
@@ -167,8 +171,14 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
     for (let index = 0; index < limit; index += 1) {
       const element = all[index];
       if (!isVisible(element)) continue;
-      const text = visibleTextOf(element).replace(/\s+/g, ' ').trim();
+      const raw = visibleTextOf(element).trim();
+      // A heading is one line. Anything spanning a line break is a container
+      // that swept up a caption and the field under it.
+      if (/[\n\r]/.test(raw)) continue;
+      const text = raw.replace(/\s+/g, ' ').trim();
       if (text.length < 2 || text.length > 80) continue;
+      // A control-less block under a caption is a widget's value, not a title.
+      if (!holdsControl(element) && captionOf(element) !== undefined) continue;
       // Only the innermost element that owns the text, never its wrappers.
       if ([...element.children].some((child) => visibleTextOf(child).replace(/\s+/g, ' ').trim() === text)) {
         continue;
@@ -204,6 +214,91 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
     return value.replace(/["\\]/g, '\\$&');
   }
 
+  /** The text an element shows, collapsed to one line. */
+  function collapsed(element: Element): string {
+    return visibleTextOf(element).replace(/\s+/g, ' ').trim();
+  }
+
+  function holdsControl(element: Element): boolean {
+    return element.querySelector(CONTROLS) !== null;
+  }
+
+  /**
+   * A field whose value is spread over several unnamed boxes — a date as
+   * DD / MM / YYYY is the common one. Named controls are excluded: those are
+   * separate fields that merely sit together.
+   */
+  function segmentsOf(element: Element): HTMLInputElement[] {
+    if (element instanceof HTMLInputElement) return [];
+    const inputs = [...element.querySelectorAll('input')].filter(
+      (input) => isVisible(input) && !input.name && !input.id,
+    );
+    return inputs.length >= 2 ? inputs : [];
+  }
+
+  /**
+   * The widget a caption governs.
+   *
+   * Real forms do not associate a caption with `for`: the bank's kit prints it
+   * as the previous sibling inside a column, and a dropdown there renders NO
+   * form control at all — no select, no name, no role, just a div that opens a
+   * list when clicked. So the caption is followed until something fillable is
+   * found, and what that something IS is decided by what it contains.
+   */
+  function widgetForCaption(caption: Element): Element | null {
+    let node: Element | null = caption;
+    for (let hop = 0; node && hop < 3; hop += 1) {
+      for (let next = node.nextElementSibling; next; next = next.nextElementSibling) {
+        if (!isVisible(next)) continue;
+        if (segmentsOf(next).length > 0) return next;
+        const control = next.querySelector(CONTROLS);
+        if (control) return control;
+        // No control anywhere: a custom widget. Its trigger is the innermost
+        // element that still carries the whole box's text.
+        if (collapsed(next)) {
+          let trigger = next;
+          while (trigger.children.length === 1 && collapsed(trigger.children[0]) === collapsed(trigger)) {
+            trigger = trigger.children[0];
+          }
+          return trigger;
+        }
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  /** The caption printed for a widget, when nothing associates the two. */
+  function captionOf(element: Element): string | undefined {
+    let node: Element | null = element;
+    for (let hop = 0; node && hop < 3; hop += 1) {
+      for (let prev = node.previousElementSibling; prev; prev = prev.previousElementSibling) {
+        if (!isVisible(prev) || prev.matches(CONTROLS) || holdsControl(prev)) continue;
+        if (/[\n\r]/.test(visibleTextOf(prev).trim())) continue;
+        const text = collapsed(prev);
+        if (text && text.length <= 80) return text;
+      }
+      node = node.parentElement;
+    }
+    return undefined;
+  }
+
+  /** Captions that read as `value`, resolved to the widget each one governs. */
+  function captionCandidates(value: string): Element[] {
+    const exact: Element[] = [];
+    const loose: Element[] = [];
+    for (const element of document.body.querySelectorAll('*')) {
+      if (!isVisible(element) || holdsControl(element)) continue;
+      const text = collapsed(element);
+      if (!text || text.length > 80) continue;
+      const equal = normalise(text) === normalise(value);
+      if (!equal && !textMatches(text, value)) continue;
+      const widget = widgetForCaption(element);
+      if (widget) (equal ? exact : loose).push(widget);
+    }
+    return exact.length > 0 ? exact : loose;
+  }
+
   /** Turns one selector into candidate elements. */
   function candidates(selector: FieldSelector): Element[] {
     const value = selector.value.trim();
@@ -235,7 +330,8 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
         }
         // "ชื่อ" must not drag in "ชื่อกลาง": the loose pass is only a fallback
         // for a label the markup decorated, never a competitor to a real match.
-        return exact.length > 0 ? exact : loose;
+        const found = exact.length > 0 ? exact : loose;
+        return found.length > 0 ? found : captionCandidates(value);
       }
     }
   }
@@ -349,20 +445,23 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
     return value === 'true' || value === '1' || value === 'yes' || value === 'on';
   }
 
+  /** `shut` means the widget would not even open — a read-only dropdown. */
+  type Written = 'ok' | 'no' | 'shut';
+
   /** Writes a value the way a user would, so framework value trackers notice. */
-  function setValue(element: Element, value: string): boolean {
+  async function setValue(element: Element, value: string): Promise<Written> {
     if (element instanceof HTMLSelectElement) {
       const options = [...element.options];
       const match =
         options.find((option) => option.value === value) ??
         options.find((option) => normalise(option.text) === normalise(value)) ??
         options.find((option) => option.text.trim() && textMatches(option.text, value));
-      if (!match) return false;
+      if (!match) return 'no';
       const setter = nativeSetter(element, 'value');
       if (setter) setter(match.value);
       else element.value = match.value;
       fire(element, 'input', 'change');
-      return true;
+      return 'ok';
     }
 
     if (element instanceof HTMLInputElement && (element.type === 'checkbox' || element.type === 'radio')) {
@@ -379,7 +478,7 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
         else element.checked = shouldCheck;
         fire(element, 'input', 'change');
       }
-      return true;
+      return 'ok';
     }
 
     if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
@@ -387,17 +486,113 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
       if (setter) setter(value);
       else element.value = value;
       fire(element, 'input', 'change');
-      return true;
+      return 'ok';
     }
 
     if (element instanceof HTMLElement && element.isContentEditable) {
       element.focus();
       element.textContent = value;
       fire(element, 'input', 'change');
-      return true;
+      return 'ok';
     }
 
-    return false;
+    const segments = segmentsOf(element);
+    if (segments.length > 0) {
+      // "31/12/2530" is one value to the form and three boxes to the DOM.
+      const parts = value.split(/[^0-9A-Za-z]+/).filter(Boolean);
+      if (parts.length === 0) return 'no';
+      let written = false;
+      for (let index = 0; index < Math.min(parts.length, segments.length); index += 1) {
+        const segment = segments[index];
+        if (segment.disabled || segment.readOnly) continue;
+        segment.focus();
+        const setter = nativeSetter(segment, 'value');
+        if (setter) setter(parts[index]);
+        else segment.value = parts[index];
+        fire(segment, 'input', 'change');
+        written = true;
+      }
+      return written ? 'ok' : 'no';
+    }
+
+    if (element instanceof HTMLElement) {
+      const outcome = await openAndPick(element, value);
+      return outcome === 'picked' ? 'ok' : outcome === 'shut' ? 'shut' : 'no';
+    }
+    return 'no';
+  }
+
+  /** Every element a person can currently see. */
+  function visibleNow(): Set<Element> {
+    const seen = new Set<Element>();
+    for (const element of document.querySelectorAll('*')) if (isVisible(element)) seen.add(element);
+    return seen;
+  }
+
+  /**
+   * Picks a value from a widget that has no form control behind it.
+   *
+   * The options do not exist until the trigger is clicked, and where they then
+   * appear is the kit's business — a modal, a portal at the end of <body>, a
+   * popover. So rather than knowing any of that, this clicks and then looks for
+   * what BECAME visible: whatever newly appeared and reads as the wanted value
+   * is the option, and clicking it is what tells the app its value changed.
+   */
+  async function openAndPick(trigger: HTMLElement, wanted: string): Promise<'picked' | 'empty' | 'shut'> {
+    const before = visibleNow();
+    trigger.click();
+
+    let opened = false;
+    for (let waited = 0; waited <= 1500; waited += 60) {
+      const fresh: Element[] = [];
+      for (const element of document.querySelectorAll('*')) {
+        if (!before.has(element) && isVisible(element)) fresh.push(element);
+      }
+      if (fresh.length > 0) opened = true;
+
+      const options = fresh.filter((element) => {
+        const text = collapsed(element);
+        return text !== '' && (normalise(text) === normalise(wanted) || textMatches(text, wanted));
+      });
+      // The innermost match is the option itself; the others are its wrappers.
+      const option = options.sort((left, right) => left.children.length - right.children.length)[0];
+      if (option instanceof HTMLElement) {
+        option.click();
+        await sleep(60);
+        return 'picked';
+      }
+      await sleep(60);
+    }
+
+    if (opened) await closeOverlay(trigger, before);
+    // Nothing opened at all: the widget refused the click, which is what a
+    // read-only dropdown does. That is a skip, not a value we failed to find.
+    return opened ? 'empty' : 'shut';
+  }
+
+  /** Puts back a list that was opened and had nothing worth clicking. */
+  async function closeOverlay(trigger: HTMLElement, before: Set<Element>): Promise<void> {
+    const stillOpen = (): Element[] => {
+      const fresh: Element[] = [];
+      for (const element of document.querySelectorAll('*')) {
+        if (!before.has(element) && isVisible(element)) fresh.push(element);
+      }
+      return fresh;
+    };
+
+    for (const key of ['keydown', 'keyup'] as const) {
+      document.dispatchEvent(new KeyboardEvent(key, { key: 'Escape', bubbles: true }));
+    }
+    await sleep(60);
+    if (stillOpen().length === 0) return;
+
+    // No Esc handler: click the outermost thing that appeared, which is the
+    // backdrop every such kit puts behind its list.
+    const fresh = stillOpen();
+    const backdrop = fresh.find((element) => !fresh.some((other) => other !== element && other.contains(element)));
+    if (backdrop instanceof HTMLElement) backdrop.click();
+    await sleep(60);
+    if (stillOpen().length > 0) trigger.click();
   }
 
   function readValue(element: Element): string {
@@ -408,7 +603,17 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
     }
     if (element instanceof HTMLTextAreaElement) return element.value;
     if (element instanceof HTMLElement && element.isContentEditable) return element.textContent ?? '';
-    return '';
+    const segments = segmentsOf(element);
+    if (segments.length > 0) {
+      const parts = segments.map((segment) => segment.value);
+      return parts.some(Boolean) ? parts.join('/') : '';
+    }
+    // A widget with no control shows its value; there is nowhere else to read.
+    // Its own furniture is not part of that value: a caret is not an answer.
+    return collapsed(element)
+      .split(' ')
+      .filter((word) => /[\p{L}\p{N}]/u.test(word))
+      .join(' ');
   }
 
   function labelFor(element: Element): string | undefined {
@@ -426,6 +631,9 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
     return (
       element.getAttribute('aria-label') ??
       element.getAttribute('placeholder') ??
+      // Ahead of `name`, behind `placeholder`: a caption says what a person
+      // sees, but a segment already labelled DD must not become the whole date.
+      captionOf(element) ??
       element.getAttribute('name') ??
       undefined
     );
@@ -468,6 +676,11 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
     const labels = (element as HTMLInputElement).labels;
     const labelText = labels?.[0]?.textContent?.trim();
     if (labelText) selectors.push({ strategy: 'label', value: labelText });
+
+    if (!labelText && !element.matches(CONTROLS)) {
+      const caption = captionOf(element);
+      if (caption) selectors.push({ strategy: 'label', value: caption });
+    }
 
     const aria = element.getAttribute('aria-label');
     if (aria) selectors.push({ strategy: 'aria', value: aria });
@@ -533,7 +746,11 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
       return element.checked === wantsChecked(element, wanted);
     }
     const bare = (text: string) => text.replace(/[^\p{L}\p{N}]/gu, '');
-    return bare(got) === bare(wanted);
+    if (bare(got) === bare(wanted)) return true;
+    // A custom widget renders its choice next to its own furniture — a caret,
+    // a clear button — so the value it now shows only has to contain what was
+    // asked for, not equal it.
+    return !holdsControl(element) && bare(wanted) !== '' && bare(got).includes(bare(wanted));
   }
 
   if (command.kind === 'fill') {
@@ -558,7 +775,12 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
         continue;
       }
       const element = resolution.element;
-      if (!setValue(element, field.value)) {
+      const written = await setValue(element, field.value);
+      if (written === 'shut') {
+        skipped.push({ key: field.key, why: 'disabled' });
+        continue;
+      }
+      if (written === 'no') {
         misses.push(field.key);
         continue;
       }
@@ -734,16 +956,50 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
   /*
    * Only what is on the screen right now, and all of it: a field left blank and
    * a box left unticked are the test case, not noise — dropping them means a
-   * saved case cannot put the form back the way it was found. Read-only summary
-   * rows are excluded because nothing can ever write them.
+   * saved case cannot put the form back the way it was found.
+   *
+   * Recording is a READ, so read-only counts. Whether a value can be written
+   * back is the fill side's question, and it already answers it honestly with
+   * `skipped` and `rejected`; leaving those fields out here instead would empty
+   * a recording of every date and dropdown that renders behind a picker.
    */
   const candidatesToRecord: Element[] = [];
+  const seenWidgets = new Set<Element>();
   for (const element of deepQuery('input, select, textarea, [contenteditable=""], [contenteditable="true"]')) {
-    if (!isUsable(element)) continue;
+    if (!isVisible(element) || (element as HTMLInputElement).disabled) continue;
     const type = (element as HTMLInputElement).type;
     if (type === 'hidden' || type === 'submit' || type === 'button' || type === 'file') continue;
     if (type === 'password' && !command.includeSecrets) continue;
+    const group = element.parentElement;
+    // A segmented field is one value: record the group, never its boxes.
+    if (group && segmentsOf(group).includes(element as HTMLInputElement)) {
+      if (!seenWidgets.has(group)) {
+        seenWidgets.add(group);
+        candidatesToRecord.push(group);
+      }
+      continue;
+    }
     candidatesToRecord.push(element);
+  }
+
+  // Widgets with no form control behind them — the kit's own dropdowns — are
+  // invisible to a sweep over inputs, so they are found through their captions.
+  for (const caption of document.body.querySelectorAll('*')) {
+    if (!isVisible(caption) || holdsControl(caption)) continue;
+    const text = collapsed(caption);
+    if (!text || text.length > 80 || /[\n\r]/.test(visibleTextOf(caption).trim())) continue;
+    for (let next = caption.nextElementSibling; next; next = next.nextElementSibling) {
+      if (!isVisible(next)) continue;
+      if (holdsControl(next) || segmentsOf(next).length > 0) break;
+      const widget = widgetForCaption(caption);
+      const says = widget ? collapsed(widget) : '';
+      const inside = [...seenWidgets].some((known) => known.contains(caption));
+      if (widget && !holdsControl(widget) && !inside && !seenWidgets.has(widget) && /[\p{L}\p{N}]/u.test(says)) {
+        seenWidgets.add(widget);
+        candidatesToRecord.push(widget);
+      }
+      break;
+    }
   }
 
   const labelCounts = new Map<string, number>();

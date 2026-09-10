@@ -16,6 +16,7 @@ import {
   exchanges,
   formCases,
   profiles,
+  recordedFields,
   rules,
   settings,
   stories,
@@ -130,10 +131,42 @@ export function installChromeMock(options: ChromeMockOptions = {}): void {
       reload: () => Promise.resolve(),
     },
     scripting: {
-      // Answers per command, so a Fill and a screen check in the same story do
-      // not get each other's shape back.
-      executeScript: ({ args }: { args?: [{ kind: string; signatures?: { id: string }[] }] }) => {
+      /*
+       * Answers per command. Returning one shape for everything is worse than
+       * returning nothing: `runRecord` and `runPick` filter on `result.kind`,
+       * so a fill answer to a record command comes back as an empty list and
+       * the panel looks broken rather than unimplemented.
+       */
+      executeScript: ({
+        args,
+      }: {
+        args?: [{ kind: string; includeSecrets?: boolean; signatures?: { id: string }[] }];
+      }) => {
         const command = args?.[0];
+        if (command?.kind === 'record') {
+          return Promise.resolve([
+            {
+              result: {
+                kind: 'record',
+                fields: command.includeSecrets
+                  ? recordedFields
+                  : recordedFields.filter((field) => field.label !== 'Password'),
+              },
+            },
+          ]);
+        }
+        if (command?.kind === 'pick') {
+          return Promise.resolve([
+            {
+              result: {
+                kind: 'pick',
+                selectors: [{ strategy: 'testid', value: 'promoCode' }],
+                label: 'Promo code',
+                value: 'SUMMER',
+              },
+            },
+          ]);
+        }
         if (command?.kind === 'screen') {
           return Promise.resolve([
             {

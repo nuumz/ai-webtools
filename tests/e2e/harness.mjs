@@ -50,6 +50,10 @@ export async function startServer() {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(readFileSync('demo/device.html', 'utf8'));
     }
+    if (url.pathname === '/demo/kesc' || url.pathname === '/demo/kesc.html') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      return res.end(readFileSync('demo/kesc.html', 'utf8'));
+    }
     if (url.pathname === '/demo/wizard' || url.pathname === '/demo/wizard.html') {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(readFileSync('demo/wizard.html', 'utf8'));

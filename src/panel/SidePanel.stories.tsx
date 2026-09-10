@@ -61,6 +61,16 @@ export const FillTabWithCase: Story = {
   },
 };
 
+/** "Read the page" — the fields the agent found, before any are added. */
+export const ReadThePage: Story = {
+  play: async (context) => {
+    await openTab('Fill')(context);
+    const canvas = within(context.canvasElement);
+    await userEvent.click(canvas.getByRole('button', { name: 'Read the page' }));
+    await waitFor(() => canvas.getByRole('dialog', { name: 'Fields found on the page' }));
+  },
+};
+
 export const SettingsTab: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);

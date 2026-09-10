@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <title>KESC webview fixture</title>
+    <style>
+      body { font: 14px system-ui, sans-serif; margin: 0; background: #f7f7f7; }
+      .screen { padding: 24px; }
+      .screen[hidden] { display: none; }
+      .title { color: #0d9488; font-size: 20px; font-weight: 700; margin: 12px 0; }
+      .row { display: flex; gap: 10px; margin-bottom: 10px; }
+      .col { display: flex; flex-direction: column; flex: 1; }
+      .input { border: 1px solid #cbd5e1; border-radius: 2px; padding: 6px 8px; background: #fff; }
+      .input[data-readonly='true'] { background: #f7f7f7; color: #64748b; }
+      .select { display: flex; justify-content: space-between; cursor: pointer; }
+      .select .placeholder { color: #9ca3af; }
+      .date { display: flex; align-items: baseline; }
+      .date input { border: none; outline: none; text-align: center; }
+      .modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4); display: flex; align-items: center; justify-content: center; }
+      .modal[hidden] { display: none; }
+      .sheet { background: #fff; border-radius: 8px; min-width: 320px; }
+      .selectHeader { font-weight: 600; padding: 12px; border-bottom: 1px solid #e5e7eb; }
+      .option { padding: 10px; cursor: pointer; }
+      .option.selected { color: #0d9488; }
+    </style>
+  </head>
+  <body>
+    <!--
+      Shaped after the real KESC webview (React Router + react-hook-form + the
+      bank's own component kit), not after what a form is usually assumed to be:
+
+      - A caption is a PRECEDING SIBLING div, not a <label for>. Only the
+        checkbox uses a real label.
+      - A dropdown renders NO form control at all: no <select>, no name, no
+        role. The trigger is a div, and its options only exist inside a modal
+        that opens on click, identified by the modal's header text.
+      - A date is three unnamed numeric inputs behind DD / MM / YYYY (พ.ศ.),
+        so the react-hook-form name never reaches the DOM.
+      - Text inputs do carry the form's own name, and some of them mask what
+        they accept.
+    -->
+    <div class="screen" id="customer">
+      <div class="title">ยืนยันตัวตน<span>ลูกค้า</span></div>
+
+      <div class="row">
+        <div class="col">
+          <div>ประเภทเอกสารสำคัญ</div>
+          <div>
+            <div class="input select" data-select="docType">
+              <span class="placeholder">กรุณาเลือก</span><span>▾</span>
+            </div>
+          </div>
+        </div>
+        <div class="col">
+          <div>เลขที่เอกสารสำคัญ</div>
+          <div><input class="input" name="docNo" maxlength="17" /></div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col">
+          <div>วันเดือนปีเกิด</div>
+          <div class="input date" data-field="birthDate">
+            <input size="2" maxlength="2" placeholder="DD" inputmode="numeric" />
+            <span>/</span>
+            <input size="2" maxlength="2" placeholder="MM" inputmode="numeric" />
+            <span>/</span>
+            <input size="4" maxlength="4" placeholder="YYYY (พ.ศ.)" inputmode="numeric" />
+          </div>
+        </div>
+        <div class="col">
+          <div>สัญชาติ</div>
+          <div>
+            <div class="input select" data-select="nationality" data-readonly="true">
+              <span class="placeholder">กรุณาเลือก</span><span>▾</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col">
+          <div>วันที่หมดอายุ</div>
+          <div class="input date" data-field="expiryDate">
+            <input size="2" maxlength="2" placeholder="DD" inputmode="numeric" />
+            <span>/</span>
+            <input size="2" maxlength="2" placeholder="MM" inputmode="numeric" />
+            <span>/</span>
+            <input size="4" maxlength="4" placeholder="YYYY (พ.ศ.)" inputmode="numeric" />
+          </div>
+          <div>
+            <input type="checkbox" id="chkPermanentExpiryDate" name="chkPermanentExpiryDate" />
+            <label for="chkPermanentExpiryDate">ตลอดชีพ</label>
+          </div>
+        </div>
+        <div class="col">
+          <div>ออกโดย</div>
+          <div><input class="input" name="issuer" maxlength="30" /></div>
+        </div>
+      </div>
+
+      <button id="toDetail">ถัดไป</button>
+    </div>
+
+    <div class="screen" id="detail" hidden>
+      <div class="title">ข้อมูลการทำรายการ</div>
+      <div class="row">
+        <div class="col">
+          <div>กรอกรหัส OTP</div>
+          <div><input class="input" name="otp" maxlength="6" /></div>
+        </div>
+      </div>
+      <button id="toCustomer">ย้อนกลับ</button>
+    </div>
+
+    <div class="modal" id="modal" hidden>
+      <div class="sheet">
+        <div class="selectHeader" id="modalHeader"></div>
+        <div id="modalOptions"></div>
+      </div>
+    </div>
+
+    <script>
+      // The option list is data, not markup: it exists only while the modal for
+      // that dropdown is open, exactly as the real kit renders it.
+      const OPTIONS = {
+        docType: [
+          { code: 'CID', text: 'บัตรประชาชน' },
+          { code: 'PASSPORT', text: 'หนังสือเดินทาง' },
+        ],
+        nationality: [
+          { code: 'TH', text: 'TH - ไทย' },
+          { code: 'LA', text: 'LA - ลาว' },
+        ],
+      };
+      const HEADERS = { docType: 'ประเภทเอกสารสำคัญ', nationality: 'สัญชาติ' };
+      const chosen = {};
+
+      const modal = document.getElementById('modal');
+      const header = document.getElementById('modalHeader');
+      const list = document.getElementById('modalOptions');
+
+      const openSelect = (name) => {
+        header.textContent = HEADERS[name];
+        list.replaceChildren(
+          ...OPTIONS[name].map((option) => {
+            const row = document.createElement('div');
+            row.className = 'option' + (chosen[name] === option.code ? ' selected' : '');
+            row.textContent = option.text;
+            row.addEventListener('click', () => {
+              chosen[name] = option.code;
+              const trigger = document.querySelector(`[data-select="${name}"] span`);
+              trigger.textContent = option.text;
+              trigger.classList.remove('placeholder');
+              modal.hidden = true;
+            });
+            return row;
+          }),
+        );
+        modal.hidden = false;
+      };
+
+      for (const trigger of document.querySelectorAll('[data-select]')) {
+        trigger.addEventListener('click', () => {
+          // A read-only dropdown swallows the click rather than disabling itself.
+          if (trigger.dataset.readonly === 'true') return;
+          openSelect(trigger.dataset.select);
+        });
+      }
+      modal.addEventListener('click', (event) => {
+        if (event.target === modal) modal.hidden = true;
+      });
+
+      // The document number only keeps what it may contain, and the form's own
+      // state is what renders — writing a value without an event is discarded.
+      const docNo = document.querySelector('[name=docNo]');
+      docNo.addEventListener('input', () => {
+        docNo.value = docNo.value.replace(/[^0-9-]/g, '');
+      });
+
+      // Ticking ตลอดชีพ is what makes the expiry segments unfillable.
+      const expiry = document.querySelectorAll('[data-field=expiryDate] input');
+      document.getElementById('chkPermanentExpiryDate').addEventListener('change', (event) => {
+        for (const input of expiry) input.disabled = event.target.checked;
+      });
+
+      const show = (step) => {
+        document.getElementById('customer').hidden = step !== 'customer';
+        document.getElementById('detail').hidden = step === 'customer';
+      };
+      document.getElementById('toDetail').addEventListener('click', () => show('detail'));
+      document.getElementById('toCustomer').addEventListener('click', () => show('customer'));
+    </script>
+  </body>
+</html>

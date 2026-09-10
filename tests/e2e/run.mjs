@@ -4,9 +4,10 @@ import capture from './capture.e2e.mjs';
 import story from './story.e2e.mjs';
 import form from './form.e2e.mjs';
 import wizard from './wizard.e2e.mjs';
+import kesc from './kesc.e2e.mjs';
 import fault from './fault.e2e.mjs';
 
-const suites = [mutation, capture, story, form, wizard, fault];
+const suites = [mutation, capture, story, form, wizard, kesc, fault];
 let failures = 0;
 for (const suite of suites) failures += await suite();
 

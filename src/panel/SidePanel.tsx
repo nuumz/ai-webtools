@@ -430,7 +430,19 @@ export default function SidePanel() {
       const browserTab = await targetTab();
       if (browserTab?.id === undefined) return;
       setIncludeSecrets(secrets);
-      setRecorded(await runRecord(browserTab.id, secrets));
+      const found = await runRecord(browserTab.id, secrets);
+      // An empty array is truthy, so without this the dialog opened with nothing
+      // in it and the button read as broken rather than as having found nothing.
+      if (found.length === 0) {
+        showToast(
+          secrets
+            ? 'Nothing to read — no field on this page can be written to.'
+            : 'Nothing to read here. Password fields are skipped unless you ask for them.',
+          4000,
+        );
+        return;
+      }
+      setRecorded(found);
     } catch (err) {
       console.error('[Panel] Record failed:', err);
       showToast('Record failed — see console');
