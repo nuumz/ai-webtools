@@ -83,6 +83,12 @@ export const PageNotConnected: Story = {
   play: openTab('Network'),
 };
 
+/** A tab that went dark after recording: the rows stay, the warning is a banner. */
+export const PageNotConnectedWithRows: Story = {
+  beforeEach: withChrome({ pageConnected: false }),
+  play: openTab('Network'),
+};
+
 /** A wider window: the log row keeps one line and the path column takes the slack. */
 export const WideViewport: Story = {
   globals: { viewport: { value: 'sidePanelWide' } },

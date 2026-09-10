@@ -35,6 +35,15 @@ export const PageNotConnected: Story = {
   args: { log: makeLog({ entries: [], pageConnected: false }) },
 };
 
+/**
+ * The same tab after it went dark on traffic it had already captured. The rows
+ * are the whole reason the panel is open, so the warning is a banner over them
+ * and never a screen instead of them.
+ */
+export const PageNotConnectedWithRows: Story = {
+  args: { log: makeLog({ pageConnected: false }) },
+};
+
 /** The ring buffer evicts the oldest entries once a tab gets chatty. */
 export const WithDroppedEntries: Story = { args: { log: makeLog({ dropped: 128 }) } };
 

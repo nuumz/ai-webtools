@@ -31,6 +31,9 @@ export default function NetworkLogCard({
 }: Props) {
   const capturing = log.recording;
   const toggleCapture = () => log.setRecording(!log.recording);
+  // Recording, but nothing in the tab is talking to the worker: whatever is
+  // already listed stays, and nothing new can arrive until a script runs.
+  const darkTab = capturing && !log.pageConnected && !log.tabClosed;
   const [filter, setFilter] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selecting, setSelecting] = useState(false);
@@ -180,6 +183,17 @@ export default function NetworkLogCard({
         </button>
       </div>
 
+      {darkTab && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-[var(--warn-line)] bg-warn-soft px-2 py-1.5">
+          <span className="min-w-0 flex-1 text-[11px] text-warn">
+            This page isn’t connected — new requests won’t be captured.
+          </span>
+          <button onClick={onReloadTab} className="btn btn-sm btn-secondary">
+            Reload the tab
+          </button>
+        </div>
+      )}
+
       <div
         ref={listRef}
         role="listbox"
@@ -201,27 +215,13 @@ export default function NetworkLogCard({
               Start recording
             </button>
           </p>
-        ) : !log.pageConnected && !log.tabClosed ? (
-          /*
-           * Recording is on and still nothing can arrive: no content script is
-           * running in the tab. Left as "nothing captured yet" this reads as a
-           * quiet app, and the user waits forever for traffic that cannot come.
-           */
-          <p className="empty">
-            <span className="text-warn">This page isn’t connected — reload the tab.</span>
-            <br />
-            Nothing on it can be captured until a content script runs — a tab opened before the
-            extension was loaded, or one the browser refuses to script.
-            <br />
-            <button onClick={onReloadTab} className="btn btn-sm btn-secondary mt-3">
-              Reload the tab
-            </button>
-          </p>
         ) : visible.length === 0 ? (
           <p className="empty">
-            {log.entries.length === 0
-              ? 'Nothing captured yet on this tab.'
-              : `No request matches “${filter.trim()}”.`}
+            {log.entries.length > 0
+              ? `No request matches “${filter.trim()}”.`
+              : darkTab
+                ? 'Nothing can be captured until a content script runs in this tab — one opened before the extension was loaded, or one the browser refuses to script.'
+                : 'Nothing captured yet on this tab.'}
           </p>
         ) : (
           <ul className="m-0 list-none p-0">
