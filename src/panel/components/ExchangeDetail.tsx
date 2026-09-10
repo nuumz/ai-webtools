@@ -5,26 +5,41 @@ import type { BodySnapshot, ExchangeMeta } from '../../shared/capture';
 import type { HttpMethod } from '../../shared/types';
 import type { RuleDraft } from './RuleForm';
 import type { ExchangeBodies } from '../hooks/useNetworkLog';
+import { caseFromPayload } from '../../shared/payloadCase';
+import type { FormCase, FormProfile } from '../../shared/form';
 
 interface Props {
   exchange: ExchangeMeta;
   bodies?: ExchangeBodies;
+  profiles: FormProfile[];
   onLoadBody: (exchangeId: string) => void;
   onCreateRule: (draft: RuleDraft) => void;
+  onSaveCase: (formCase: FormCase) => void;
   onClose: () => void;
 }
 
-type View = 'response' | 'request' | 'rule';
+type View = 'response' | 'request' | 'rule' | 'case';
 
 const METHODS: HttpMethod[] = ['ANY', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 
+// Nouns, and short ones: four segments have to fit a 400px panel, and a verb
+// bought nothing that the panel each one opens does not already say.
 const VIEWS: [View, string][] = [
   ['response', 'Response'],
   ['request', 'Request'],
-  ['rule', 'Make rule'],
+  ['rule', 'Rule'],
+  ['case', 'Case'],
 ];
 
-export default function ExchangeDetail({ exchange, bodies, onLoadBody, onCreateRule, onClose }: Props) {
+export default function ExchangeDetail({
+  exchange,
+  bodies,
+  profiles,
+  onLoadBody,
+  onCreateRule,
+  onSaveCase,
+  onClose,
+}: Props) {
   const [view, setView] = useState<View>('response');
   const [matchQuery, setMatchQuery] = useState(exchange.search.length > 0);
 
@@ -110,6 +125,16 @@ export default function ExchangeDetail({ exchange, bodies, onLoadBody, onCreateR
       <div className="p-2">
         {view === 'response' && <BodyBlock body={bodies?.response} loading={bodies === undefined} />}
         {view === 'request' && <BodyBlock body={bodies?.request} loading={bodies === undefined} />}
+        {view === 'case' && (
+          <PayloadCase
+            key={exchange.id}
+            profiles={profiles}
+            payload={responsePayload}
+            loading={bodies === undefined}
+            defaultName={`${exchange.method} ${exchange.pathname}`}
+            onSave={onSaveCase}
+          />
+        )}
         {view === 'rule' && (
           <div className="space-y-2.5">
             <div>
@@ -152,6 +177,150 @@ export default function ExchangeDetail({ exchange, bodies, onLoadBody, onCreateR
             {stubBlocked && <p className="m-0 text-[11px] leading-relaxed text-warn">{stubBlocked}</p>}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Turns a captured response into a case, once. A live binding would be smaller
+ * to build and wrong to use: a fixture that changes when a new response is
+ * recorded has stopped being a test case.
+ *
+ * The count is the headline because picking the wrong exchange is the mistake
+ * this screen exists to catch — three of fifteen fields matched is not a thin
+ * payload, it is the wrong request, and nothing else on the screen says so.
+ */
+function PayloadCase({
+  profiles,
+  payload,
+  loading,
+  defaultName,
+  onSave,
+}: {
+  profiles: FormProfile[];
+  payload: unknown;
+  loading: boolean;
+  defaultName: string;
+  onSave: (formCase: FormCase) => void;
+}) {
+  const [profileId, setProfileId] = useState(profiles[0]?.id);
+  const [name, setName] = useState(defaultName);
+  const [saved, setSaved] = useState(false);
+
+  const profile = profiles.find((entry) => entry.id === profileId);
+
+  if (loading) return <p className="empty !py-4">Reading the response…</p>;
+  if (payload === undefined) {
+    return (
+      <p className="empty !py-4">
+        This response is not JSON, so there are no values to lift out of it.
+      </p>
+    );
+  }
+  if (profiles.length === 0 || !profile) {
+    return (
+      <p className="empty !py-4">
+        A case needs a profile to belong to — the selectors live there, and only the values come
+        from this response. Make one in the Fill tab first.
+      </p>
+    );
+  }
+
+  const { formCase, match } = caseFromPayload(profile, payload, name.trim() || defaultName);
+  const total = profile.fields.length;
+  // Fewer than half is the shape of a wrong pick, not of a sparse response.
+  const thin = total > 0 && match.matched.length * 2 < total;
+
+  return (
+    <div className="space-y-2.5">
+      <div className="flex gap-1.5">
+        <select
+          className="field field-sm min-w-0 flex-1"
+          value={profileId ?? ''}
+          onChange={(e) => {
+            setProfileId(e.target.value);
+            setSaved(false);
+          }}
+          aria-label="Profile this case belongs to"
+        >
+          {profiles.map((entry) => (
+            <option key={entry.id} value={entry.id}>
+              {entry.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <input
+        className="field field-sm w-full"
+        value={name}
+        onChange={(e) => {
+          setName(e.target.value);
+          setSaved(false);
+        }}
+        placeholder="Case name"
+        aria-label="Case name"
+      />
+
+      <p className={`m-0 text-[12px] ${thin ? 'text-warn' : 'text-ink'}`}>
+        <span className="font-semibold tabular-nums">{match.matched.length}</span> of{' '}
+        <span className="tabular-nums">{total}</span> field{total === 1 ? '' : 's'} matched
+        {thin && ' — that usually means this is the wrong response'}
+      </p>
+
+      {match.matched.length > 0 && (
+        <div>
+          <p className="eyebrow m-0 mb-1">From the response</p>
+          <ul className="card m-0 list-none overflow-hidden p-0">
+            {match.matched.map((entry) => (
+              <li
+                key={entry.key}
+                className="flex items-baseline gap-2 border-b border-line px-2 py-1 text-[11px] last:border-b-0"
+              >
+                <span className="w-24 shrink-0 truncate font-mono text-ink">{entry.key}</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-faint" title={entry.path}>
+                  {entry.path}
+                </span>
+                <span className="min-w-0 max-w-[9rem] truncate text-mute">
+                  {formCase.values[entry.key] === '' ? (
+                    <em className="text-faint">blank</em>
+                  ) : (
+                    formCase.values[entry.key]
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {match.unmatched.length > 0 && (
+        <div>
+          <p className="eyebrow m-0 mb-1">Keeping their own value</p>
+          <p className="m-0 font-mono text-[11px] text-mute">{match.unmatched.join(', ')}</p>
+        </div>
+      )}
+
+      {match.unused.length > 0 && (
+        <p className="note m-0" title={match.unused.slice(0, 40).join('\n')}>
+          {match.unused.length} value{match.unused.length === 1 ? '' : 's'} in the response matched
+          no field.
+        </p>
+      )}
+
+      <div className="flex items-center gap-2 border-t border-line pt-2.5">
+        <button
+          className="btn btn-sm btn-primary"
+          disabled={match.matched.length === 0 || saved}
+          onClick={() => {
+            onSave(formCase);
+            setSaved(true);
+          }}
+        >
+          {saved ? 'Saved' : 'Save case'}
+        </button>
+        {saved && <span className="text-[11px] text-faint">Pick it in the Fill tab.</span>}
       </div>
     </div>
   );

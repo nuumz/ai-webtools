@@ -14,6 +14,7 @@ import { STORAGE_KEYS, storyEntriesKey } from '../../shared/types';
 import {
   bodies,
   exchanges,
+  formCases,
   profiles,
   rules,
   settings,
@@ -33,6 +34,7 @@ const seed = (): Store => ({
   [STORAGE_KEYS.rules]: rules,
   [STORAGE_KEYS.stories]: stories,
   [STORAGE_KEYS.profiles]: profiles,
+  [STORAGE_KEYS.cases]: formCases,
   [STORAGE_KEYS.counters]: { user: 41 },
   [storyEntriesKey('st_checkout')]: [],
 });
@@ -128,10 +130,37 @@ export function installChromeMock(options: ChromeMockOptions = {}): void {
       reload: () => Promise.resolve(),
     },
     scripting: {
-      executeScript: () =>
-        Promise.resolve([
-          { result: { kind: 'fill', filled: ['email', 'password', 'total'], misses: ['city'] } },
-        ]),
+      // Answers per command, so a Fill and a screen check in the same story do
+      // not get each other's shape back.
+      executeScript: ({ args }: { args?: [{ kind: string; signatures?: { id: string }[] }] }) => {
+        const command = args?.[0];
+        if (command?.kind === 'screen') {
+          return Promise.resolve([
+            {
+              result: {
+                kind: 'screen',
+                scores: (command.signatures ?? []).map((signature, index) => ({
+                  id: signature.id,
+                  matched: index === 0 ? 2 : 0,
+                  total: 2,
+                })),
+                sample: ['Create your account', 'Billing address', 'Payment'],
+              },
+            },
+          ]);
+        }
+        return Promise.resolve([
+          {
+            result: {
+              kind: 'fill',
+              filled: ['email', 'password', 'total'],
+              misses: ['city'],
+              skipped: [{ key: 'country', why: 'hidden' }],
+              rejected: [{ key: 'qty', wanted: '3', got: '1' }],
+            },
+          },
+        ]);
+      },
     },
     commands: { onCommand: { addListener: () => {} } },
   };

@@ -4,8 +4,9 @@
  * the whole setup without the content-addressed store behind it.
  */
 import { getBody, putBody } from './bodyStore';
-import { migrateFormFillFields, type FormProfile } from './form';
+import { migrateFormFillFields, type FormCase, type FormProfile } from './form';
 import {
+  loadCases,
   loadCounters,
   loadProfiles,
   loadRules,
@@ -14,6 +15,7 @@ import {
   loadStoryEntries,
   normalizeSettings,
   removeStory,
+  saveCases,
   saveCounters,
   saveProfiles,
   saveRules,
@@ -39,15 +41,18 @@ export interface StoredState {
   settings: Settings;
   mutationRules: MutationRule[];
   formProfiles: FormProfile[];
+  /** Named value sets for those profiles; local-only, so the file is how they travel. */
+  formCases: FormCase[];
   counters: Record<string, number>;
   stories: PortableStory[];
 }
 
 export async function exportState(): Promise<StoredState> {
-  const [settings, mutationRules, formProfiles, counters, storyMetas] = await Promise.all([
+  const [settings, mutationRules, formProfiles, formCases, counters, storyMetas] = await Promise.all([
     loadSettings(),
     loadRules(),
     loadProfiles(),
+    loadCases(),
     loadCounters(),
     loadStories(),
   ]);
@@ -72,6 +77,7 @@ export async function exportState(): Promise<StoredState> {
     settings,
     mutationRules,
     formProfiles,
+    formCases,
     counters,
     stories,
   };
@@ -82,6 +88,7 @@ export type ImportMode = 'merge' | 'replace';
 export interface ImportReport {
   rules: number;
   profiles: number;
+  cases: number;
   stories: number;
   bodies: number;
 }
@@ -102,6 +109,7 @@ export async function importState(raw: unknown, mode: ImportMode): Promise<Impor
 
   await saveRules(mergeById(existingRules, state.mutationRules));
   await saveProfiles(mergeById(existingProfiles, state.formProfiles));
+  await saveCases(mergeById(mode === 'merge' ? await loadCases() : [], state.formCases));
   await saveCounters(
     mode === 'merge' ? { ...(await loadCounters()), ...state.counters } : state.counters,
   );
@@ -127,6 +135,7 @@ export async function importState(raw: unknown, mode: ImportMode): Promise<Impor
   return {
     rules: state.mutationRules.length,
     profiles: state.formProfiles.length,
+    cases: state.formCases.length,
     stories: state.stories.length,
     bodies,
   };
@@ -148,6 +157,8 @@ export function migrateState(raw: unknown): StoredState {
     settings: normalizeSettings(input.settings),
     mutationRules: Array.isArray(input.mutationRules) ? input.mutationRules : [],
     formProfiles,
+    // Absent in every file written before cases existed.
+    formCases: Array.isArray(input.formCases) ? input.formCases : [],
     counters: input.counters && typeof input.counters === 'object' ? input.counters : {},
     stories: Array.isArray(input.stories)
       ? input.stories

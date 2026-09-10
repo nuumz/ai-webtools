@@ -5,6 +5,7 @@ import { IconChecklist, IconClear, IconRecord, IconSearch, IconStop } from './ic
 import { durationColor, formatClock, formatDuration } from '../format';
 import type { ExchangeMeta } from '../../shared/capture';
 import type { StoryMeta } from '../../shared/story';
+import type { FormCase, FormProfile } from '../../shared/form';
 import type { NetworkLogState } from '../hooks/useNetworkLog';
 import type { RuleDraft } from './RuleForm';
 
@@ -14,7 +15,10 @@ const PANE_MIN = 120;
 interface Props {
   log: NetworkLogState;
   stories: StoryMeta[];
+  /** Passed through: a case saved from a response has to belong to one. */
+  profiles: FormProfile[];
   onCreateRule: (draft: RuleDraft) => void;
+  onSaveCase: (formCase: FormCase) => void;
   onReloadTab: () => void;
   onSaveToStory: (
     exchangeIds: string[],
@@ -25,7 +29,9 @@ interface Props {
 export default function NetworkLogCard({
   log,
   stories,
+  profiles,
   onCreateRule,
+  onSaveCase,
   onReloadTab,
   onSaveToStory,
 }: Props) {
@@ -342,8 +348,10 @@ export default function NetworkLogCard({
             <ExchangeDetail
               exchange={selected}
               bodies={log.bodies[selected.id]}
+              profiles={profiles}
               onLoadBody={log.loadBody}
               onCreateRule={onCreateRule}
+              onSaveCase={onSaveCase}
               onClose={() => setSelectedId(null)}
             />
           </div>

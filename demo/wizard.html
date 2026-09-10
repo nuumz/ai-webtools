@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <title>Wizard fixture</title>
+    <style>
+      body { font: 14px system-ui, sans-serif; margin: 24px; max-width: 900px; }
+      h2 { color: #0d9488; }
+      .steps { display: flex; gap: 16px; list-style: none; padding: 0; }
+      .steps li { color: #94a3b8; }
+      .steps li[aria-current='step'] { color: #0d9488; font-weight: 600; }
+      section[hidden] { display: none; }
+      .block { border: 1px solid #e2e8f0; padding: 12px; margin: 12px 0; }
+      .row { display: flex; gap: 12px; margin: 8px 0; align-items: end; }
+      label { display: block; font-size: 12px; color: #475569; }
+      .req { color: #dc2626; }
+      .date input { width: 48px; }
+      .summary { color: #334155; }
+    </style>
+  </head>
+  <body>
+    <!--
+      A fixture shaped like the app this extension is actually used on: one URL,
+      several wizard steps, Thai labels, a name block repeated in two languages,
+      Buddhist-era dates split across segments, a checkbox that disables a
+      sibling, a select filled from a late response, and read-only rows that are
+      not fields. The inactive step stays in the DOM, hidden — which is what lets
+      a naive filler write into the wrong screen.
+    -->
+    <ul class="steps">
+      <li id="step-auth">Authentication</li>
+      <li id="step-service">Service Selection</li>
+      <li id="step-customer" aria-current="step">Customer Info</li>
+      <li id="step-detail">Service Detail</li>
+      <li id="step-review">Review &amp; Confirmation</li>
+    </ul>
+
+    <section id="customer">
+      <h2>ยืนยันตัวตนลูกค้า</h2>
+
+      <div class="row">
+        <div>
+          <label for="docType">ประเภทเอกสารสำคัญ<span class="req">*</span></label>
+          <select id="docType">
+            <option value="">กรุณาเลือก</option>
+            <option value="CID">บัตรประชาชน</option>
+            <option value="PASSPORT">หนังสือเดินทาง</option>
+          </select>
+        </div>
+        <div>
+          <label for="docNumber">เลขที่เอกสารสำคัญ<span class="req">*</span></label>
+          <input id="docNumber" />
+        </div>
+      </div>
+
+      <div class="block" data-section="ชื่อ-นามสกุล (ไทย)">
+        <strong>ชื่อ-นามสกุล (ไทย)</strong>
+        <div class="row">
+          <div>
+            <label>คำนำหน้า</label>
+            <select name="titleTh">
+              <option value="">กรุณาเลือก</option>
+              <option value="MS">ด.ญ.</option>
+              <option value="MRS">นาง</option>
+            </select>
+          </div>
+          <div><label>ชื่อ</label><input name="firstNameTh" /></div>
+          <div><label>ชื่อกลาง</label><input name="middleNameTh" /></div>
+          <div><label>นามสกุล</label><input name="lastNameTh" /></div>
+        </div>
+      </div>
+
+      <div class="block" data-section="ชื่อ-นามสกุล (อังกฤษ)">
+        <strong>ชื่อ-นามสกุล (อังกฤษ)</strong>
+        <div class="row">
+          <div>
+            <label>คำนำหน้า</label>
+            <select name="titleEn">
+              <option value="">กรุณาเลือก</option>
+              <option value="MISS">MISS</option>
+              <option value="MRS">MRS</option>
+            </select>
+          </div>
+          <div><label>ชื่อ</label><input name="firstNameEn" /></div>
+          <div><label>ชื่อกลาง</label><input name="middleNameEn" /></div>
+          <div><label>นามสกุล</label><input name="lastNameEn" /></div>
+        </div>
+      </div>
+
+      <div class="row date">
+        <div>
+          <label>วันเดือนปีเกิด</label>
+          <input id="birthDay" placeholder="DD" maxlength="2" />
+          <input id="birthMonth" placeholder="MM" maxlength="2" />
+          <input id="birthYear" placeholder="YYYY [พ.ศ.]" maxlength="4" />
+        </div>
+        <div>
+          <label for="nationality">สัญชาติ</label>
+          <select id="nationality">
+            <option value="TH">TH - ไทย</option>
+            <option value="LA">LA - ลาว</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row date">
+        <div>
+          <label>วันที่หมดอายุ</label>
+          <input id="expiryDay" placeholder="DD" maxlength="2" />
+          <input id="expiryMonth" placeholder="MM" maxlength="2" />
+          <input id="expiryYear" placeholder="YYYY [พ.ศ.]" maxlength="4" />
+        </div>
+        <div>
+          <label><input type="checkbox" id="lifetime" /> ตลอดชีพ</label>
+        </div>
+        <div><label for="issuedBy">ออกโดย</label><input id="issuedBy" /></div>
+      </div>
+
+      <div class="row">
+        <fieldset>
+          <legend>ผลการตรวจ</legend>
+          <label><input type="radio" name="checkResult" value="PASS" /> ผ่าน</label>
+          <label><input type="radio" name="checkResult" value="FAIL" /> ไม่ผ่าน</label>
+        </fieldset>
+      </div>
+
+      <button id="toDetail">ถัดไป</button>
+    </section>
+
+    <section id="detail" hidden>
+      <h2>ข้อมูลการทำรายการ</h2>
+
+      <div class="row summary">
+        <div><label>ชื่อกองทุน</label><input value="KEFI3MI" readonly /></div>
+        <div><label>จำนวน</label><input value="10,000.00 บาท" readonly /></div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="fundAccount">เลขที่บัญชีกองทุน</label>
+          <select id="fundAccount"><option value="">กรุณาเลือก</option></select>
+        </div>
+        <div>
+          <label for="channel">ช่องทางรับหลักฐาน</label>
+          <select id="channel">
+            <option value="">กรุณาเลือก</option>
+            <option value="EMAIL">Email</option>
+            <option value="SMS">SMS</option>
+          </select>
+        </div>
+        <div><label for="channelValue">อีเมล</label><input id="channelValue" /></div>
+      </div>
+
+      <div class="row">
+        <div><label for="otp">กรอกรหัส OTP</label><input id="otp" /></div>
+        <div>
+          <label for="payment">การชำระเงิน</label>
+          <select id="payment">
+            <option value="">กรุณาเลือก</option>
+            <option value="KMONEY">K-MONEY</option>
+          </select>
+        </div>
+      </div>
+
+      <button id="toCustomer">ย้อนกลับ</button>
+    </section>
+
+    <script>
+      // A mask that keeps only what a document number may contain. Writing
+      // anything else leaves the field empty while every write event still fires.
+      const docNumber = document.getElementById('docNumber');
+      docNumber.addEventListener('input', () => {
+        docNumber.value = docNumber.value.replace(/[^0-9-]/g, '');
+      });
+
+      // The expiry date is not a separate control from the lifetime flag: ticking
+      // the box is what makes those three inputs unfillable.
+      const expiry = ['expiryDay', 'expiryMonth', 'expiryYear'].map((id) => document.getElementById(id));
+      document.getElementById('lifetime').addEventListener('change', (event) => {
+        for (const input of expiry) input.disabled = event.target.checked;
+      });
+
+      // The account list arrives from the network, so it is empty at the moment
+      // the step first paints.
+      let accountsLoaded = false;
+      const loadAccounts = () => {
+        if (accountsLoaded) return;
+        accountsLoaded = true;
+        setTimeout(() => {
+          const select = document.getElementById('fundAccount');
+          for (const [value, text] of [
+            ['001', '001-2-34567-8'],
+            ['002', '002-9-87654-3'],
+          ]) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = text;
+            select.append(option);
+          }
+        }, 1200);
+      };
+
+      const show = (step) => {
+        const customer = step === 'customer';
+        document.getElementById('customer').hidden = !customer;
+        document.getElementById('detail').hidden = customer;
+        const mark = (id, active) => {
+          const item = document.getElementById(id);
+          if (active) item.setAttribute('aria-current', 'step');
+          else item.removeAttribute('aria-current');
+        };
+        mark('step-customer', customer);
+        mark('step-detail', !customer);
+        if (!customer) loadAccounts();
+      };
+      document.getElementById('toDetail').addEventListener('click', () => show('detail'));
+      document.getElementById('toCustomer').addEventListener('click', () => show('customer'));
+
+      if (location.hash === '#detail') show('detail');
+    </script>
+  </body>
+</html>

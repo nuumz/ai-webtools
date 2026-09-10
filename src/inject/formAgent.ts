@@ -12,17 +12,47 @@ export interface RecordedField {
   selectors: FieldSelector[];
   value: string;
   label?: string;
+  /** Set only when the label is repeated, so the field can be told from its twin. */
+  anchor?: { text: string };
 }
 
 export type AgentCommand =
   | { kind: 'fill'; fields: ResolvedFillField[] }
   | { kind: 'record'; includeSecrets: boolean }
+  /** Which of these screens is on show right now. */
+  | { kind: 'screen'; signatures: { id: string; texts: string[] }[] }
   /** `sessionId` scopes the cancel broadcast to this picking session. */
   | { kind: 'pick'; sessionId: string };
 
+/** Why a field was left alone: it is on the screen, but not fillable right now. */
+export interface SkippedField {
+  key: string;
+  why: 'hidden' | 'disabled';
+}
+
+/** Written, but the app did not keep it — a mask, a native date, a re-render. */
+export interface RejectedField {
+  key: string;
+  wanted: string;
+  got: string;
+}
+
 export type AgentResult =
-  | { kind: 'fill'; filled: string[]; misses: string[] }
+  /**
+   * `misses` is a broken selector; `skipped` is a field the screen answered for
+   * — another wizard step's input, or one a checkbox disabled. Folding the two
+   * together is what makes a working profile look broken.
+   */
+  | {
+      kind: 'fill';
+      filled: string[];
+      misses: string[];
+      skipped: SkippedField[];
+      rejected: RejectedField[];
+    }
   | { kind: 'record'; fields: RecordedField[] }
+  /** How much of each signature this frame can see, so the panel can rank them. */
+  | { kind: 'screen'; scores: { id: string; matched: number; total: number }[]; sample: string[] }
   /** `selectors: null` means the user cancelled, or another frame was picked. */
   | { kind: 'pick'; selectors: FieldSelector[] | null; label?: string; value?: string };
 
@@ -60,6 +90,44 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
     return !control.disabled && !control.readOnly;
   }
 
+  /**
+   * Compares visible text the way a person reads it: composed Thai, no
+   * zero-width joiners, one space between words, and without the marker glyphs
+   * a form puts next to a required label. toLowerCase is kept for Latin and is
+   * a no-op on Thai.
+   */
+  function normalise(text: string): string {
+    return text
+      .normalize('NFC')
+      .replace(/[\u200b-\u200d\ufeff\u00a0]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/^[\s*:：＊]+|[\s*:：＊]+$/g, '')
+      .toLowerCase();
+  }
+
+  function textMatches(actual: string, wanted: string): boolean {
+    const left = normalise(actual);
+    const right = normalise(wanted);
+    if (!right) return false;
+    return left === right || left.startsWith(right) || left.endsWith(right);
+  }
+
+  const CONTROLS = 'input, select, textarea, [contenteditable]';
+
+  /**
+   * The control a label names: by `for`, then one it wraps, then the first in
+   * its own row. Thai forms commonly print the label as a sibling above the
+   * input with neither `for` nor nesting, which the first two rules cannot see.
+   */
+  function controlFor(label: Element): Element | null {
+    const target = label.getAttribute('for');
+    if (target) {
+      const byId = (label.getRootNode() as Document | ShadowRoot).querySelector(`[id="${escapeAttr(target)}"]`);
+      if (byId) return byId;
+    }
+    return label.querySelector(CONTROLS) ?? label.parentElement?.querySelector(CONTROLS) ?? null;
+  }
+
   function escapeAttr(value: string): string {
     return value.replace(/["\\]/g, '\\$&');
   }
@@ -84,30 +152,101 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
         return deepQuery(value);
       case 'label': {
         // Match the label's text, then follow it to the control it names.
-        const wanted = value.toLowerCase();
-        const controls: Element[] = [];
+        const exact: Element[] = [];
+        const loose: Element[] = [];
         for (const label of deepQuery('label')) {
-          const text = (label.textContent ?? '').trim().toLowerCase();
-          if (text !== wanted) continue;
-          const target = label.getAttribute('for');
-          const control = target
-            ? (label.getRootNode() as Document | ShadowRoot).querySelector(`[id="${escapeAttr(target)}"]`)
-            : label.querySelector('input, select, textarea, [contenteditable]');
-          if (control) controls.push(control);
+          const text = label.textContent ?? '';
+          const equal = normalise(text) === normalise(value);
+          if (!equal && !textMatches(text, value)) continue;
+          const control = controlFor(label);
+          if (control) (equal ? exact : loose).push(control);
         }
-        return controls;
+        // "ชื่อ" must not drag in "ชื่อกลาง": the loose pass is only a fallback
+        // for a label the markup decorated, never a competitor to a real match.
+        return exact.length > 0 ? exact : loose;
       }
     }
   }
 
-  /** First selector that identifies exactly one usable element wins. */
-  function resolveField(selectors: FieldSelector[]): Element | null {
-    for (const selector of selectors) {
-      const usable = candidates(selector).filter(isUsable);
-      if (usable.length === 1) return usable[0];
-      // Ambiguous or missing: fall through to the next, more specific selector.
+  /** The nearest ancestor whose text carries the anchor, or null. */
+  function scopeFor(element: Element, text: string): Element | null {
+    let current: Element | null = element.parentElement;
+    while (current) {
+      if (normalise(current.textContent ?? '').includes(normalise(text))) return current;
+      current = current.parentElement;
     }
     return null;
+  }
+
+  /**
+   * Keeps the candidates that sit in the anchored section. Every candidate has
+   * SOME ancestor carrying the text — <body> does — so the tightest scope wins:
+   * an outer one only matched because it wraps the inner one.
+   */
+  function withinAnchor(elements: Element[], text: string): Element[] {
+    const scoped: { element: Element; scope: Element }[] = [];
+    for (const element of elements) {
+      const scope = scopeFor(element, text);
+      if (scope) scoped.push({ element, scope });
+    }
+    if (scoped.length <= 1) return scoped.map((entry) => entry.element);
+    return scoped
+      .filter((entry) => !scoped.some((other) => other.scope !== entry.scope && entry.scope.contains(other.scope)))
+      .map((entry) => entry.element);
+  }
+
+  type Resolution =
+    | { kind: 'ok'; element: Element }
+    | { kind: 'skip'; why: 'hidden' | 'disabled' }
+    | { kind: 'missing' };
+
+  /**
+   * First selector that identifies exactly one usable element wins. When every
+   * selector finds the element but it cannot be written — another step is
+   * showing, or a checkbox disabled it — say so instead of calling it a miss.
+   */
+  /**
+   * A radio group is one field with N controls, so "ambiguous" is the wrong
+   * answer: the value names which member to pick, by its value attribute or by
+   * the label beside it.
+   */
+  function chooseRadio(elements: Element[], value: string): Element | undefined {
+    const radios = elements.filter(
+      (element) => element instanceof HTMLInputElement && element.type === 'radio',
+    ) as HTMLInputElement[];
+    if (radios.length !== elements.length || radios.length < 2) return undefined;
+    return (
+      radios.find((radio) => radio.value === value) ??
+      radios.find((radio) => {
+        const label = labelFor(radio);
+        return label !== undefined && normalise(label) === normalise(value);
+      }) ??
+      radios.find((radio) => {
+        const label = labelFor(radio);
+        return label !== undefined && textMatches(label, value);
+      })
+    );
+  }
+
+  function resolveField(selectors: FieldSelector[], anchor?: { text: string }, value?: string): Resolution {
+    let blocked: 'hidden' | 'disabled' | undefined;
+
+    for (const selector of selectors) {
+      const found = anchor ? withinAnchor(candidates(selector), anchor.text) : candidates(selector);
+      const usable = found.filter(isUsable);
+      if (usable.length === 1) return { kind: 'ok', element: usable[0] };
+      if (usable.length > 1) {
+        const chosen = value === undefined ? undefined : chooseRadio(usable, value);
+        if (chosen) return { kind: 'ok', element: chosen };
+        continue; // Ambiguous: a later, more specific selector may not be.
+      }
+      for (const element of found) {
+        // Hidden outranks disabled: a field on another step is not "disabled".
+        if (!isVisible(element)) blocked = 'hidden';
+        else if (blocked === undefined) blocked = 'disabled';
+      }
+    }
+    return blocked ? { kind: 'skip', why: blocked } : { kind: 'missing' };
   }
 
   function nativeSetter(element: Element, property: 'value' | 'checked'): ((value: unknown) => void) | undefined {
@@ -125,13 +264,27 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
     for (const type of types) element.dispatchEvent(new Event(type, { bubbles: true }));
   }
 
+  /**
+   * Whether this box or radio should end up ticked. A radio takes the name of
+   * the member to choose — 'ผ่าน' means "this one", not "false".
+   */
+  function wantsChecked(element: HTMLInputElement, value: string): boolean {
+    if (element.type === 'radio') {
+      const label = labelFor(element);
+      if (element.value === value) return true;
+      if (label !== undefined && textMatches(label, value)) return true;
+    }
+    return value === 'true' || value === '1' || value === 'yes' || value === 'on';
+  }
+
   /** Writes a value the way a user would, so framework value trackers notice. */
   function setValue(element: Element, value: string): boolean {
     if (element instanceof HTMLSelectElement) {
       const options = [...element.options];
       const match =
         options.find((option) => option.value === value) ??
-        options.find((option) => option.text.trim().toLowerCase() === value.trim().toLowerCase());
+        options.find((option) => normalise(option.text) === normalise(value)) ??
+        options.find((option) => option.text.trim() && textMatches(option.text, value));
       if (!match) return false;
       const setter = nativeSetter(element, 'value');
       if (setter) setter(match.value);
@@ -141,11 +294,19 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
     }
 
     if (element instanceof HTMLInputElement && (element.type === 'checkbox' || element.type === 'radio')) {
-      const shouldCheck = value === 'true' || value === '1' || value === 'yes' || value === 'on';
-      const setter = nativeSetter(element, 'checked');
-      if (setter) setter(shouldCheck);
-      else element.checked = shouldCheck;
-      fire(element, 'input', 'change');
+      const shouldCheck = wantsChecked(element, value);
+      if (element.checked !== shouldCheck) {
+        // A real click is what a framework's own onChange listens for; setting
+        // `.checked` alone leaves the app's state untouched behind a box that
+        // looks ticked.
+        element.click();
+      }
+      if (element.checked !== shouldCheck) {
+        const setter = nativeSetter(element, 'checked');
+        if (setter) setter(shouldCheck);
+        else element.checked = shouldCheck;
+        fire(element, 'input', 'change');
+      }
       return true;
     }
 
@@ -184,6 +345,12 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
     if (text) return text;
     const wrapper = element.closest('label')?.textContent?.trim();
     if (wrapper) return wrapper;
+    // A label printed above the input, associated by nothing but layout.
+    for (const label of element.parentElement?.querySelectorAll(':scope > label') ?? []) {
+      if (controlFor(label) !== element) continue;
+      const sibling = label.textContent?.trim();
+      if (sibling) return sibling;
+    }
     return (
       element.getAttribute('aria-label') ??
       element.getAttribute('placeholder') ??
@@ -246,9 +413,62 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
 
   // ---------------------------------------------------------------- commands
 
+  /** True once the control can take the value — options loaded, and so on. */
+  function isReady(element: Element, waitFor: { optionText?: string; minOptions?: number }): boolean {
+    if (!(element instanceof HTMLSelectElement)) return true;
+    if (waitFor.minOptions !== undefined && element.options.length < waitFor.minOptions) return false;
+    if (waitFor.optionText !== undefined) {
+      return [...element.options].some((option) => textMatches(option.text, waitFor.optionText as string));
+    }
+    return true;
+  }
+
+  /**
+   * Resolves the field, polling while it declares a readiness condition. A
+   * select whose options arrive from the network has none when its step first
+   * paints, and the only tool before this was a fixed sleep on the field
+   * BEFORE it — which never ran when that field itself missed.
+   */
+  async function resolveWhenReady(field: ResolvedFillField): Promise<Resolution> {
+    const waitFor = field.waitFor;
+    let resolution = resolveField(field.selectors, field.anchor, field.value);
+    if (!waitFor) return resolution;
+
+    const deadline = Date.now() + (waitFor.timeoutMs ?? 3000);
+    while (Date.now() < deadline) {
+      if (resolution.kind === 'ok' && isReady(resolution.element, waitFor)) return resolution;
+      await sleep(100);
+      resolution = resolveField(field.selectors, field.anchor, field.value);
+    }
+    return resolution;
+  }
+
+  /**
+   * Did the app keep what was written? "setValue returned true" is not the same
+   * thing: a mask can strip the value, a native date input drops a string it
+   * cannot parse, and a re-render can revert a controlled input — all of which
+   * used to be reported as a successful fill. Masks legitimately reformat, so
+   * only the characters that carry meaning are compared.
+   */
+  function kept(element: Element, wanted: string): boolean {
+    const got = readValue(element);
+    if (got === wanted) return true;
+    if (element instanceof HTMLSelectElement) {
+      const option = element.selectedOptions[0];
+      return option !== undefined && (option.value === wanted || textMatches(option.text, wanted));
+    }
+    if (element instanceof HTMLInputElement && (element.type === 'checkbox' || element.type === 'radio')) {
+      return element.checked === wantsChecked(element, wanted);
+    }
+    const bare = (text: string) => text.replace(/[^\p{L}\p{N}]/gu, '');
+    return bare(got) === bare(wanted);
+  }
+
   if (command.kind === 'fill') {
     const filled: string[] = [];
     const misses: string[] = [];
+    const skipped: SkippedField[] = [];
+    const rejected: RejectedField[] = [];
 
     // Sequential on purpose: a dependent dropdown only has its options once
     // the field before it has changed and the app has re-rendered.
@@ -256,13 +476,22 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
       // Substring match, not a glob: the agent cannot import the URL matcher.
       if (field.framePattern && !location.href.includes(field.framePattern)) continue;
 
-      const element = resolveField(field.selectors);
-      if (!element) {
+      const resolution = await resolveWhenReady(field);
+      if (resolution.kind === 'skip') {
+        skipped.push({ key: field.key, why: resolution.why });
+        continue;
+      }
+      if (resolution.kind === 'missing') {
         misses.push(field.key);
         continue;
       }
+      const element = resolution.element;
       if (!setValue(element, field.value)) {
         misses.push(field.key);
+        continue;
+      }
+      if (!kept(element, field.value)) {
+        rejected.push({ key: field.key, wanted: field.value, got: readValue(element) });
         continue;
       }
       filled.push(field.key);
@@ -275,7 +504,7 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
       if (field.after?.waitMs) await sleep(field.after.waitMs);
     }
 
-    return { kind: 'fill', filled, misses };
+    return { kind: 'fill', filled, misses, skipped, rejected };
   }
 
   if (command.kind === 'pick') {
@@ -398,16 +627,94 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
     });
   }
 
-  const recorded: RecordedField[] = [];
+  if (command.kind === 'screen') {
+    /*
+     * Only text a person can see counts. A wizard keeps the other steps in the
+     * DOM, so matching textContent would report every screen at once — which is
+     * the same blindness that made framePattern useless here.
+     */
+    const visibleText = (): string => {
+      const parts: string[] = [];
+      const walk = (root: Element): void => {
+        for (const child of root.children) {
+          if (!isVisible(child)) continue;
+          if (child.children.length === 0) {
+            const text = child.textContent?.trim();
+            if (text) parts.push(text);
+          } else {
+            walk(child);
+          }
+        }
+      };
+      walk(document.body);
+      return normalise(parts.join(' \n '));
+    };
+
+    const seen = visibleText();
+    // A count, not a verdict: two screens can both be present in part, and only
+    // the panel knows which of them the user was working on.
+    const scores = command.signatures.map((signature) => ({
+      id: signature.id,
+      matched: signature.texts.filter((text) => text.trim() && seen.includes(normalise(text))).length,
+      total: signature.texts.filter((text) => text.trim()).length,
+    }));
+
+    // Headings first: what the user would name the screen after.
+    const sample = [...document.querySelectorAll('h1, h2, h3, [aria-current], legend')]
+      .filter(isVisible)
+      .map((element) => element.textContent?.trim() ?? '')
+      .filter(Boolean)
+      .slice(0, 12);
+
+    return { kind: 'screen', scores, sample };
+  }
+
+  /** The heading of the block a control sits in, e.g. "ชื่อ-นามสกุล (ไทย)". */
+  function sectionFor(element: Element): string | undefined {
+    let current: Element | null = element.parentElement;
+    while (current) {
+      const section = current.getAttribute('data-section');
+      if (section) return section;
+      const heading = current.querySelector(':scope > strong, :scope > legend, :scope > h1, :scope > h2, :scope > h3, :scope > h4');
+      const text = heading?.textContent?.trim();
+      if (text) return text;
+      current = current.parentElement;
+    }
+    return undefined;
+  }
+
+  /*
+   * Only what is on the screen right now, and all of it: a field left blank and
+   * a box left unticked are the test case, not noise — dropping them means a
+   * saved case cannot put the form back the way it was found. Read-only summary
+   * rows are excluded because nothing can ever write them.
+   */
+  const candidatesToRecord: Element[] = [];
   for (const element of deepQuery('input, select, textarea, [contenteditable=""], [contenteditable="true"]')) {
-    if (!isVisible(element)) continue;
+    if (!isUsable(element)) continue;
     const type = (element as HTMLInputElement).type;
     if (type === 'hidden' || type === 'submit' || type === 'button' || type === 'file') continue;
     if (type === 'password' && !command.includeSecrets) continue;
+    candidatesToRecord.push(element);
+  }
 
-    const value = readValue(element);
-    if (!value || value === 'false') continue;
-    recorded.push({ selectors: buildSelectors(element), value, label: labelFor(element) });
+  const labelCounts = new Map<string, number>();
+  for (const element of candidatesToRecord) {
+    const label = normalise(labelFor(element) ?? '');
+    if (label) labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+  }
+
+  const recorded: RecordedField[] = [];
+  for (const element of candidatesToRecord) {
+    const label = labelFor(element);
+    const repeated = label !== undefined && (labelCounts.get(normalise(label)) ?? 0) > 1;
+    const section = repeated ? sectionFor(element) : undefined;
+    recorded.push({
+      selectors: buildSelectors(element),
+      value: readValue(element),
+      label,
+      ...(section ? { anchor: { text: section } } : {}),
+    });
   }
   return { kind: 'record', fields: recorded };
 }

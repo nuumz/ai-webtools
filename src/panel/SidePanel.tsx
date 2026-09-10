@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import RuleForm, { type RuleDraft } from './components/RuleForm';
 import RuleList from './components/RuleList';
 import ProfilesCard from './components/ProfilesCard';
@@ -10,6 +11,7 @@ import NetworkLogCard from './components/NetworkLogCard';
 import StoriesCard from './components/StoriesCard';
 import { useNetworkLog } from './hooks/useNetworkLog';
 import {
+  loadCases,
   loadCounters,
   loadProfiles,
   loadRules,
@@ -17,6 +19,7 @@ import {
   loadStories,
   loadStoryEntries,
   removeStory,
+  saveCases,
   saveCounters,
   saveProfiles,
   saveRules,
@@ -26,15 +29,33 @@ import {
   normalizeSettings,
 } from '../shared/storage';
 import {
+  applyCase,
+  newCase,
   newProfile,
   recordedToField,
+  type FormCase,
   type FormProfile,
   type RecordedFieldInput,
+  type ScreenSignature,
 } from '../shared/form';
 import { resolveProfile } from '../shared/resolveProfile';
-import { activeTab, runFill, runPick, runRecord } from '../inject/run';
+import {
+  activeTab,
+  runFill,
+  runPick,
+  runRecord,
+  runScreen,
+  type FillOutcome,
+  type ScreenOutcome,
+} from '../inject/run';
 import { collectGarbage, putBody, trimBodies, usageBytes } from '../shared/bodyStore';
-import { downloadState, exportState, importState, type ImportMode } from '../shared/portable';
+import {
+  downloadState,
+  exportState,
+  importState,
+  type ImportMode,
+  type ImportReport,
+} from '../shared/portable';
 import {
   addEntry,
   exchangeToEntry,
@@ -49,12 +70,16 @@ export default function SidePanel() {
   const [rules, setRules] = useState<MutationRule[]>([]);
   const [profiles, setProfiles] = useState<FormProfile[]>([]);
   const [profileId, setProfileId] = useState<string | undefined>(undefined);
+  const [cases, setCases] = useState<FormCase[]>([]);
+  const [caseId, setCaseId] = useState<string | undefined>(undefined);
+  const [screen, setScreen] = useState<ScreenOutcome | undefined>(undefined);
+  const [screenBusy, setScreenBusy] = useState(false);
   const [counters, setCounters] = useState<Record<string, number>>({});
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [stories, setStories] = useState<StoryMeta[]>([]);
   const [editing, setEditing] = useState<MutationRule | undefined>(undefined);
   const [draft, setDraft] = useState<RuleDraft | undefined>(undefined);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<ReactNode>(null);
   const [recorded, setRecorded] = useState<RecordedFieldInput[] | null>(null);
   const [includeSecrets, setIncludeSecrets] = useState(false);
   const [usage, setUsage] = useState(0);
@@ -71,6 +96,7 @@ export default function SidePanel() {
     void loadStories().then(setStories);
     void loadCounters().then(setCounters);
     void usageBytes().then(setUsage);
+    void loadCases().then(setCases);
     void loadProfiles().then((loaded) => {
       setProfiles(loaded);
       setProfileId((current) => current ?? loaded[0]?.id);
@@ -86,10 +112,12 @@ export default function SidePanel() {
       const profileChange = changes[STORAGE_KEYS.profiles];
       const settingsChange = changes[STORAGE_KEYS.settings];
       const storyChange = changes[STORAGE_KEYS.stories];
+      const caseChange = changes[STORAGE_KEYS.cases];
       if (ruleChange) setRules((ruleChange.newValue as MutationRule[]) ?? []);
       if (profileChange) setProfiles((profileChange.newValue as FormProfile[]) ?? []);
       if (settingsChange) setSettings(normalizeSettings(settingsChange.newValue));
       if (storyChange) setStories((storyChange.newValue as StoryMeta[]) ?? []);
+      if (caseChange) setCases((caseChange.newValue as FormCase[]) ?? []);
     };
     chrome.storage.onChanged.addListener(listener);
     return () => chrome.storage.onChanged.removeListener(listener);
@@ -103,6 +131,11 @@ export default function SidePanel() {
   const persistProfiles = useCallback((next: FormProfile[]) => {
     setProfiles(next);
     void saveProfiles(next);
+  }, []);
+
+  const persistCases = useCallback((next: FormCase[]) => {
+    setCases(next);
+    void saveCases(next);
   }, []);
 
   const persistSettings = useCallback((next: Settings) => {
@@ -155,10 +188,8 @@ export default function SidePanel() {
     try {
       setStorageBusy(`Importing ${file.name}…`);
       const report = await importState(JSON.parse(await file.text()), mode);
-      showToast(
-        `Imported ${report.rules} rule(s), ${report.profiles} profile(s), ${report.stories} story(ies)`,
-      );
-      // Storage listeners re-hydrate rules and profiles; these two are read once.
+      showToast(summarizeImport(report));
+      // Storage listeners re-hydrate rules, profiles and cases; these two are read once.
       void loadStories().then(setStories);
       void loadCounters().then(setCounters);
       refreshUsage();
@@ -187,9 +218,9 @@ export default function SidePanel() {
     showToast(removed > 0 ? `Deleted ${removed} unused body(ies)` : 'Nothing unused to delete');
   };
 
-  const showToast = (message: string) => {
+  const showToast = (message: ReactNode, ms = 2500) => {
     setToast(message);
-    setTimeout(() => setToast(null), 2500);
+    setTimeout(() => setToast(null), ms);
   };
 
   const handleCreateRule = (fromExchange: RuleDraft) => {
@@ -281,9 +312,18 @@ export default function SidePanel() {
   };
 
   const activeProfile = profiles.find((profile) => profile.id === profileId);
+  const profileCases = cases.filter((item) => item.profileId === profileId);
+  const activeCase = profileCases.find((item) => item.id === caseId);
+  /**
+   * What a fill would actually type. The case is folded in here rather than at
+   * the fill site so the preview column and the fill can never disagree about
+   * which values are in play — a case that reads right and fills wrong is the
+   * one failure mode a value editor cannot afford.
+   */
+  const cased = activeProfile ? applyCase(activeProfile, activeCase) : undefined;
   // Preview only: counters are drawn but not persisted until an actual fill.
-  const previewed = activeProfile
-    ? resolveProfile(activeProfile, { counters })
+  const previewed = cased
+    ? resolveProfile(cased, { counters })
     : { fields: [], values: {}, counters, errors: [] };
 
   /**
@@ -308,12 +348,12 @@ export default function SidePanel() {
   };
 
   const fillForm = async () => {
-    if (!activeProfile) return;
+    if (!cased) return;
     try {
       const browserTab = await targetTab();
       if (browserTab?.id === undefined) return;
 
-      const resolved = resolveProfile(activeProfile, { counters });
+      const resolved = resolveProfile(cased, { counters });
       if (resolved.errors.length > 0) {
         showToast(resolved.errors[0]);
         return;
@@ -321,13 +361,11 @@ export default function SidePanel() {
       const outcome = await runFill(browserTab.id, resolved.fields);
       setCounters(resolved.counters);
       void saveCounters(resolved.counters);
-      rememberProfileForTab(browserTab.url, activeProfile.id);
+      rememberProfileForTab(browserTab.url, cased.id);
 
-      showToast(
-        outcome.misses.length > 0
-          ? `Filled ${outcome.filled.length} · missed ${outcome.misses.join(', ')}`
-          : `Filled ${outcome.filled.length} field(s)`,
-      );
+      const unfilled =
+        outcome.misses.length + outcome.skipped.length + outcome.rejected.length;
+      showToast(<FillSummary outcome={outcome} />, unfilled > 0 ? 6000 : 2500);
     } catch (err) {
       console.error('[Panel] Fill failed:', err);
       showToast('Fill failed — see console');
@@ -435,7 +473,93 @@ export default function SidePanel() {
     if (!activeProfile) return;
     const remaining = profiles.filter((profile) => profile.id !== activeProfile.id);
     persistProfiles(remaining);
+    // A case outlives nothing: its selectors are gone with the profile.
+    persistCases(cases.filter((item) => item.profileId !== activeProfile.id));
     setProfileId(remaining[0]?.id);
+  };
+
+  const createCase = () => {
+    if (!activeProfile) return;
+    const created = newCase(activeProfile.id, `Case ${profileCases.length + 1}`);
+    persistCases([...cases, created]);
+    setCaseId(created.id);
+  };
+
+  const updateCase = (next: FormCase) =>
+    persistCases(cases.map((item) => (item.id === next.id ? next : item)));
+
+  /**
+   * A case lifted out of a captured response. It lands selected on the Fill
+   * tab rather than silently in the list — the next thing anyone does with a
+   * case built from a payload is check what it actually holds.
+   */
+  const saveCaseFromPayload = (formCase: FormCase) => {
+    persistCases([...cases, formCase]);
+    setProfileId(formCase.profileId);
+    setCaseId(formCase.id);
+    showToast(
+      <span>
+        Saved <span className="font-semibold">{formCase.name}</span> — open the Fill tab to use it
+      </span>,
+      4000,
+    );
+  };
+
+  const deleteCase = () => {
+    if (!activeCase) return;
+    persistCases(cases.filter((item) => item.id !== activeCase.id));
+    setCaseId(undefined);
+  };
+
+  /**
+   * Which of the known screens the tab is showing. Every profile that carries a
+   * signature is scored, not just the active one — the useful answer when a
+   * fill misses everything is "you are on Service Detail", which needs the
+   * other profiles in the comparison.
+   */
+  const checkScreen = async () => {
+    // A blank row is a signature still being typed, not a text to match: left
+    // in, its `total` could never be reached and no screen would ever be best.
+    const signatures = profiles
+      .map((profile) => ({
+        id: profile.id,
+        texts: (profile.screen?.texts ?? []).map((text) => text.trim()).filter(Boolean),
+      }))
+      .filter((signature) => signature.texts.length > 0);
+    setScreenBusy(true);
+    try {
+      const browserTab = await targetTab();
+      if (browserTab?.id === undefined) return;
+      setScreen(await runScreen(browserTab.id, signatures));
+    } catch (err) {
+      console.error('[Panel] Screen check failed:', err);
+      setScreen(undefined);
+    } finally {
+      setScreenBusy(false);
+    }
+  };
+
+  /**
+   * A wizard step change moves nothing the panel can observe — same URL, same
+   * tab — so the score is refreshed when the Fill tab comes forward rather than
+   * kept live. Cheap, and it is the moment the answer is about to matter.
+   */
+  useEffect(() => {
+    if (tab !== 'fill') return;
+    void checkScreen();
+    // Advancing a wizard step means clicking the page and coming back, and the
+    // return trip is a focus event. It is not every case the chip can go stale
+    // in, but it is the one that happens, and it costs no timer.
+    const refresh = () => void checkScreen();
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, log.tabUrl]);
+
+  const setScreenSignature = (next: ScreenSignature | undefined) => {
+    if (!activeProfile) return;
+    const { screen: _drop, ...rest } = activeProfile;
+    updateProfile(next && next.texts.length > 0 ? { ...rest, screen: next } : rest);
   };
 
   // The worker is torn down whenever it idles; the panel reconnects itself, and
@@ -512,7 +636,9 @@ export default function SidePanel() {
           <NetworkLogCard
             log={log}
             stories={stories}
+            profiles={profiles}
             onCreateRule={handleCreateRule}
+            onSaveCase={saveCaseFromPayload}
             onReloadTab={() => void reloadTab()}
             onSaveToStory={saveToStory}
           />
@@ -598,10 +724,20 @@ export default function SidePanel() {
           <ProfilesCard
             profiles={profiles}
             activeId={profileId}
+            cases={profileCases}
+            activeCaseId={activeCase?.id}
+            screen={screen}
+            screenBusy={screenBusy}
             preview={previewed.values}
             errors={previewed.errors}
             disabled={log.tabClosed}
             onSelect={setProfileId}
+            onSelectCase={setCaseId}
+            onCreateCase={createCase}
+            onChangeCase={updateCase}
+            onDeleteCase={deleteCase}
+            onCheckScreen={() => void checkScreen()}
+            onChangeScreen={setScreenSignature}
             onChange={updateProfile}
             onCreate={createProfile}
             onDuplicate={duplicateProfile}
@@ -646,6 +782,75 @@ export default function SidePanel() {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Only what actually arrived. A fixed list reads "0 case(s)" on every file
+ * written before cases existed, and a zero standing where the number the user
+ * is checking should be is worse than saying nothing.
+ */
+function summarizeImport(report: ImportReport): string {
+  const parts = [
+    countOf(report.rules, 'rule'),
+    countOf(report.profiles, 'profile'),
+    countOf(report.cases, 'case'),
+    countOf(report.stories, 'story', 'stories'),
+  ].filter(Boolean);
+  return parts.length > 0 ? `Imported ${parts.join(', ')}` : 'Nothing in that file to import';
+}
+
+function countOf(count: number, one: string, many = `${one}s`): string | undefined {
+  return count > 0 ? `${count} ${count === 1 ? one : many}` : undefined;
+}
+
+/**
+ * Four outcomes, four weights. A field the screen answered for — it belongs to
+ * another step, or a checkbox disabled it — is not a fault, and listing it next
+ * to a broken selector is what made a six-step wizard report most of itself as
+ * missing on every fill. A rejection is the loudest of the four because it is
+ * the only one the panel used to count as a success: the write went through and
+ * the app threw it away, so the summary said twelve and the screen showed nine.
+ */
+function FillSummary({ outcome }: { outcome: FillOutcome }) {
+  const hidden = outcome.skipped.filter((entry) => entry.why === 'hidden');
+  const disabled = outcome.skipped.filter((entry) => entry.why === 'disabled');
+  const why = [
+    hidden.length > 0 ? `on another step: ${hidden.map((e) => e.key).join(', ')}` : undefined,
+    disabled.length > 0 ? `disabled right now: ${disabled.map((e) => e.key).join(', ')}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  // The one outcome that can name its own fix: the field wants another format.
+  const refused = outcome.rejected
+    .map((entry) => `${entry.key}: wanted ${entry.wanted}, got ${entry.got}`)
+    .join('\n');
+
+  return (
+    <span className="flex flex-wrap items-baseline gap-x-1.5">
+      <span>
+        Filled <span className="font-semibold tabular-nums">{outcome.filled.length}</span>
+      </span>
+      {outcome.skipped.length > 0 && (
+        <span className="text-faint" title={why}>
+          · skipped <span className="tabular-nums">{outcome.skipped.length}</span>
+        </span>
+      )}
+      {outcome.rejected.length > 0 && (
+        <span className="text-bad" title={`The page did not keep these:\n${refused}`}>
+          · rejected <span className="font-semibold tabular-nums">{outcome.rejected.length}</span>
+        </span>
+      )}
+      {outcome.misses.length > 0 && (
+        <span
+          className="text-warn"
+          title={`Nothing on the page matched: ${outcome.misses.join(', ')}`}
+        >
+          · missed <span className="tabular-nums">{outcome.misses.length}</span>
+        </span>
+      )}
+    </span>
   );
 }
 

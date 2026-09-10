@@ -41,6 +41,16 @@ describe('migrateState', () => {
     expect(state.stories[0].bodies).toEqual({});
   });
 
+  it('reads a file written before cases existed', () => {
+    expect(migrateState({ formProfiles: [] }).formCases).toEqual([]);
+  });
+
+  it('keeps the cases a newer file carries', () => {
+    const formCases = [{ id: 'cs_1', profileId: 'pf_1', name: 'minor', values: { middleName: '' } }];
+    // The blank value is the point: a case that drops it cannot restore the form.
+    expect(migrateState({ formCases }).formCases).toEqual(formCases);
+  });
+
   it('normalizes settings from an older export', () => {
     const state = migrateState({ settings: { enabled: false } });
     expect(state.settings.enabled).toBe(false);

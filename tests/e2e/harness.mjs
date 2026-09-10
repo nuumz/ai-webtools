@@ -43,6 +43,12 @@ export async function startServer() {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(readFileSync('demo/index.html', 'utf8'));
     }
+    // A wizard shaped like the app the extension is used on: several steps
+    // behind one URL, Thai labels, BE dates, conditional and late-loaded fields.
+    if (url.pathname === '/demo/wizard' || url.pathname === '/demo/wizard.html') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      return res.end(readFileSync('demo/wizard.html', 'utf8'));
+    }
     if (url.pathname === '/demo/frame.html') {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(readFileSync('demo/frame.html', 'utf8'));

@@ -52,6 +52,15 @@ export const MocksTab: Story = { play: openTab('Mocks') };
 export const FillTab: Story = { play: openTab('Fill') };
 
 /** Backup, cross-device sync and storage housekeeping — a sheet over the tabs. */
+/** The Fill tab with a case chosen: values come from the case, selectors do not. */
+export const FillTabWithCase: Story = {
+  play: async (context) => {
+    await openTab('Fill')(context);
+    const canvas = within(context.canvasElement);
+    await userEvent.selectOptions(canvas.getByLabelText('Active case'), 'cs_bulk');
+  },
+};
+
 export const SettingsTab: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);

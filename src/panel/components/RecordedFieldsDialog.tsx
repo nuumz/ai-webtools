@@ -69,10 +69,16 @@ export default function RecordedFieldsDialog({
                 />
                 <span className="min-w-0">
                   <span className="font-semibold text-ink">{field.label ?? 'field'}</span>
+                  {field.anchor && (
+                    <span className="ml-1.5 text-faint">in “{field.anchor.text}”</span>
+                  )}
                   <span className="block truncate font-mono text-mute">
                     {describeSelector(field.selectors)}
                   </span>
-                  <span className="block truncate text-faint">{field.value}</span>
+                  {/* A field left blank is part of the case, not a gap in it. */}
+                  <span className="block truncate text-faint">
+                    {field.value === '' ? <em>left blank</em> : field.value}
+                  </span>
                 </span>
               </label>
             ))
