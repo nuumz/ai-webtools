@@ -237,10 +237,10 @@ const takeToken = (): boolean => {
 
 const forwardCapture = (raw: string): void => {
   /*
-   * Trust the interceptor for recording, but never forward unless this tab's
-   * Record switch is on.
+   * The interceptor already decided to emit. Gating again on local flags drops
+   * the first requests after reload — those flags lag the worker's inspect state.
    */
-  if (!armed || !recording || !raw || raw === lastCapture) return;
+  if (!raw || raw === lastCapture) return;
   let batch: CapturedExchange[];
   try {
     batch = JSON.parse(raw || '[]') as CapturedExchange[];
@@ -302,15 +302,19 @@ onBus('bodyReq', replyBody);
 // 1. The interceptor asks for config as soon as it boots (it may miss the first push).
 window.addEventListener(REQUEST_EVENT, () => {
   lastPushed = '';
-  void pushConfig();
+  if (armed && recording) void pushConfig();
+  else openPort();
 });
 onBus('request', () => {
   lastPushed = '';
-  void pushConfig();
+  if (armed && recording) void pushConfig();
+  else openPort();
 });
 
-// 2. Push once on load…
-void pushConfig();
+// 2. Push once on load when this tab was already inspecting. Do not write an
+// inert config over a live stored one before the worker answers.
+if (armed && recording) void pushConfig();
+else openPort();
 
 // 3. …and on every edit made in the Side Panel, so changes apply without a reload.
 chrome.storage.onChanged.addListener((changes, area) => {

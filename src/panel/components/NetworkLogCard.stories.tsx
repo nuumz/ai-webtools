@@ -34,8 +34,8 @@ export const Disconnected: Story = {
   args: { capturing: false, log: makeLog({ connected: false, entries: [], tabUrl: undefined }) },
 };
 
-/** Expanding a row shows the bodies and the one-click rule buttons. */
-export const RowExpanded: Story = {
+/** Selecting a row opens the detail pane below the log — the list stays put. */
+export const RowSelected: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByText('/api/items'));
@@ -46,7 +46,7 @@ export const RowExpanded: Story = {
 export const SelectMode: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.click(canvas.getByRole('button', { name: 'Select' }));
+    await userEvent.click(canvas.getByRole('button', { name: /Pick responses/ }));
     const boxes = canvasElement.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
     for (const box of boxes) if (!box.disabled) await userEvent.click(box);
   },

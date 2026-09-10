@@ -15,6 +15,7 @@ const meta = {
     onImport: fn(),
     onTrim: fn(),
     onCollectGarbage: fn(),
+    onClose: fn(),
   },
 } satisfies Meta<typeof SettingsCard>;
 

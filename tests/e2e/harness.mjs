@@ -67,6 +67,13 @@ export async function startServer() {
     if (url.pathname === '/api/large') {
       return json({ rows: Array.from({ length: 8000 }, (_, i) => ({ id: i, name: `row ${i}` })) });
     }
+    // Headers land at once, the body never ends: what a keep-alive proxy, an SSE
+    // channel or a stalled upstream looks like to the page.
+    if (url.pathname === '/api/dribble') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write('{"partial":');
+      return; // deliberately never ended
+    }
     if (url.pathname === '/api/error') {
       return json({ message: 'boom' }, 500);
     }

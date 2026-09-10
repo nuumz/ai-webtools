@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { IconChevron, IconPlus, IconTarget } from './icons';
 import {
   newField,
   type FieldSelector,
@@ -28,6 +29,7 @@ interface Props {
   activeId?: string;
   preview: Record<string, string>;
   errors: string[];
+  disabled?: boolean;
   onSelect: (profileId: string) => void;
   onChange: (profile: FormProfile) => void;
   onCreate: () => void;
@@ -43,6 +45,7 @@ export default function ProfilesCard({
   activeId,
   preview,
   errors,
+  disabled,
   onSelect,
   onChange,
   onCreate,
@@ -52,8 +55,9 @@ export default function ProfilesCard({
   onRecord,
   onPick,
 }: Props) {
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const active = profiles.find((profile) => profile.id === activeId);
+  const enabledCount = active?.fields.filter((field) => field.enabled).length ?? 0;
 
   const updateField = (fieldId: string, patch: Partial<ProfileField>) => {
     if (!active) return;
@@ -70,239 +74,288 @@ export default function ProfilesCard({
   };
 
   return (
-    <div className="panel-card p-3.5">
-      <div className="mb-3 flex items-center justify-between gap-2 border-b border-line pb-2">
-        <h2 className="m-0 shrink-0 text-[13px] font-semibold">Form profiles</h2>
-        <div className="flex items-center gap-1.5">
-          <select
-            className="field field-sm max-w-[9rem]"
-            value={activeId ?? ''}
-            onChange={(e) => onSelect(e.target.value)}
-          >
-            {profiles.length === 0 && <option value="">no profiles</option>}
-            {profiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.name}
-              </option>
-            ))}
-          </select>
-          <button onClick={onRecord} className="btn btn-ghost" title="Record the filled form">
-            Record
-          </button>
-          <button onClick={onCreate} className="btn btn-ghost" title="New profile">
-            New
-          </button>
-          {active && (
-            <>
-              <button onClick={onDuplicate} className="btn btn-ghost" title="Duplicate">
-                Dup
-              </button>
-              <button onClick={onDelete} className="btn btn-ghost btn-danger" title="Delete">
-                Del
-              </button>
-            </>
-          )}
-        </div>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="toolbar">
+        <select
+          className="field field-sm min-w-0 flex-1"
+          value={activeId ?? ''}
+          onChange={(e) => onSelect(e.target.value)}
+          aria-label="Active profile"
+        >
+          {profiles.length === 0 && <option value="">no profiles yet</option>}
+          {profiles.map((profile) => (
+            <option key={profile.id} value={profile.id}>
+              {profile.name}
+            </option>
+          ))}
+        </select>
+        <button onClick={onCreate} className="btn btn-sm btn-secondary" title="New profile">
+          <IconPlus />
+          New
+        </button>
+        {active && (
+          <>
+            <button onClick={onDuplicate} className="btn btn-sm btn-ghost" title="Duplicate this profile">
+              Copy
+            </button>
+            <button
+              onClick={onDelete}
+              className="btn btn-sm btn-ghost btn-danger"
+              title="Delete this profile"
+            >
+              Delete
+            </button>
+          </>
+        )}
       </div>
 
       {!active ? (
-        <p className="panel-empty">
-          Create a profile to stop retyping the same form. Values can copy each other or be
-          computed, so a signup form fills in one click.
+        <p className="empty">
+          Create a profile to stop retyping the same form.
+          <br />
+          Values can copy each other or be computed, so a signup form fills in one click.
         </p>
       ) : (
-        <div className="space-y-3">
-          <div className="flex gap-2">
-            <input
-              className="field min-w-0 flex-1"
-              value={active.name}
-              onChange={(e) => onChange({ ...active, name: e.target.value })}
-              placeholder="Profile name"
-            />
-            <input
-              className="field field-mono min-w-0 flex-1"
-              value={active.siteScope ?? ''}
-              onChange={(e) => onChange({ ...active, siteScope: e.target.value })}
-              placeholder="site scope (optional)"
-              title="Only offered on URLs matching this pattern"
-            />
-          </div>
+        <>
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-2">
+            <div className="flex gap-1.5">
+              <input
+                className="field min-w-0 flex-1"
+                value={active.name}
+                onChange={(e) => onChange({ ...active, name: e.target.value })}
+                placeholder="Profile name"
+                aria-label="Profile name"
+              />
+              <input
+                className="field field-mono min-w-0 flex-1"
+                value={active.siteScope ?? ''}
+                onChange={(e) => onChange({ ...active, siteScope: e.target.value })}
+                placeholder="site scope (optional)"
+                title="Only offered on URLs matching this pattern"
+              />
+            </div>
 
-          {errors.length > 0 && (
-            <ul className="m-0 list-disc pl-4 text-[11px] text-bad">
-              {errors.map((error) => (
-                <li key={error}>{error}</li>
-              ))}
-            </ul>
-          )}
+            {errors.length > 0 && (
+              <ul className="m-0 list-disc space-y-0.5 rounded-[var(--radius-md)] border border-[var(--bad-line)] bg-bad-soft py-1.5 pr-2 pl-5 text-[11px] text-bad">
+                {errors.map((error) => (
+                  <li key={error}>{error}</li>
+                ))}
+              </ul>
+            )}
 
-          <div className="space-y-1.5">
-            {active.fields.map((field) => (
-              <div key={field.id} className="overflow-hidden rounded-[var(--radius-md)] border border-line">
-                <div className="flex items-center gap-1.5 p-1.5">
-                  <input
-                    type="checkbox"
-                    checked={field.enabled}
-                    onChange={(e) => updateField(field.id, { enabled: e.target.checked })}
-                    title="Include when filling"
-                  />
-                  <input
-                    className="field field-mono field-sm w-24 shrink-0"
-                    value={field.key}
-                    onChange={(e) => updateField(field.id, { key: e.target.value })}
-                    placeholder="key"
-                  />
-                  <select
-                    className="field field-sm w-auto shrink-0"
-                    value={field.source.kind}
-                    onChange={(e) =>
-                      updateField(field.id, {
-                        source: { kind: e.target.value as typeof field.source.kind, value: field.source.value },
-                      })
-                    }
-                  >
-                    {SOURCE_KINDS.map((kind) => (
-                      <option key={kind.value} value={kind.value}>
-                        {kind.label}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    className="field field-sm min-w-0 flex-1"
-                    value={field.source.value}
-                    onChange={(e) =>
-                      updateField(field.id, { source: { kind: field.source.kind, value: e.target.value } })
-                    }
-                    placeholder={PLACEHOLDERS[field.source.kind]}
-                  />
-                  <button
-                    onClick={() => setExpandedId(expandedId === field.id ? null : field.id)}
-                    className="btn-link shrink-0 px-1"
-                    title="Selectors and follow-up"
-                  >
-                    {expandedId === field.id ? '▾' : '▸'}
-                  </button>
-                </div>
+            <div>
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <p className="eyebrow m-0">Fields</p>
+                <span className="text-[10.5px] text-faint tabular-nums">
+                  {enabledCount} of {active.fields.length} will fill
+                </span>
+              </div>
 
-                {field.source.kind !== 'literal' && preview[field.key] !== undefined && (
-                  <p className="truncate px-2 pb-1.5 font-mono text-[10px] text-faint">→ {preview[field.key]}</p>
-                )}
-
-                {expandedId === field.id && (
-                  <div className="space-y-2 border-t border-line bg-inset p-2">
-                    <p className="m-0 text-[10px] font-semibold uppercase tracking-[0.06em] text-faint">
-                      Selectors — tried in order, first unique match wins
-                    </p>
-                    {field.selectors.map((selector, index) => (
-                      <div key={index} className="flex gap-1.5">
+              {active.fields.length === 0 ? (
+                <p className="empty !py-4">Add a field, or pick one straight off the page.</p>
+              ) : (
+                <div className="card overflow-hidden">
+                  {active.fields.map((field, index) => (
+                    <div key={field.id} className={index > 0 ? 'border-t border-line' : undefined}>
+                      <div className="flex items-center gap-1.5 px-1.5 py-1.5">
+                        <input
+                          type="checkbox"
+                          checked={field.enabled}
+                          onChange={(e) => updateField(field.id, { enabled: e.target.checked })}
+                          title="Include when filling"
+                        />
+                        <input
+                          className="field field-mono field-sm w-20 shrink-0"
+                          value={field.key}
+                          onChange={(e) => updateField(field.id, { key: e.target.value })}
+                          placeholder="key"
+                          aria-label="Field key"
+                        />
                         <select
-                          className="field field-sm w-auto"
-                          value={selector.strategy}
+                          className="field field-sm !w-auto shrink-0"
+                          value={field.source.kind}
                           onChange={(e) =>
-                            updateSelector(field, index, { strategy: e.target.value as FieldStrategy })
+                            updateField(field.id, {
+                              source: {
+                                kind: e.target.value as typeof field.source.kind,
+                                value: field.source.value,
+                              },
+                            })
                           }
+                          aria-label="Value kind"
                         >
-                          {STRATEGIES.map((strategy) => (
-                            <option key={strategy} value={strategy}>
-                              {strategy}
+                          {SOURCE_KINDS.map((kind) => (
+                            <option key={kind.value} value={kind.value}>
+                              {kind.label}
                             </option>
                           ))}
                         </select>
                         <input
-                          className="field field-mono field-sm min-w-0 flex-1"
-                          value={selector.value}
-                          onChange={(e) => updateSelector(field, index, { value: e.target.value })}
-                          placeholder={selector.strategy === 'css' ? '#email' : 'value'}
+                          className="field field-sm min-w-0 flex-1"
+                          value={field.source.value}
+                          onChange={(e) =>
+                            updateField(field.id, {
+                              source: { kind: field.source.kind, value: e.target.value },
+                            })
+                          }
+                          placeholder={PLACEHOLDERS[field.source.kind]}
+                          aria-label="Value"
                         />
                         <button
-                          className="btn-link btn-danger px-1"
-                          onClick={() =>
-                            updateField(field.id, {
-                              selectors: field.selectors.filter((_, i) => i !== index),
-                            })
-                          }
+                          onClick={() => setOpenId(openId === field.id ? null : field.id)}
+                          className="btn btn-sm btn-icon btn-ghost"
+                          aria-expanded={openId === field.id}
+                          title="Selectors and follow-up"
                         >
-                          ×
+                          <IconChevron
+                            className={`transition-transform ${openId === field.id ? 'rotate-90' : ''}`}
+                          />
                         </button>
                       </div>
-                    ))}
-                    <div className="flex gap-3">
-                      <button
-                        className="btn-link"
-                        onClick={() =>
-                          updateField(field.id, {
-                            selectors: [...field.selectors, { strategy: 'css', value: '' }],
-                          })
-                        }
-                      >
-                        + fallback selector
-                      </button>
-                      <button className="btn-link" onClick={() => onPick(field.id)}>
-                        Pick from page
-                      </button>
-                    </div>
 
-                    <div className="flex flex-wrap items-center gap-3 border-t border-line pt-2">
-                      <label className="flex items-center gap-1 text-[11px] text-mute">
-                        wait
-                        <input
-                          type="number"
-                          className="field field-sm w-16"
-                          value={field.after?.waitMs ?? ''}
-                          onChange={(e) =>
-                            updateField(field.id, {
-                              after: { ...field.after, waitMs: Number(e.target.value) || undefined },
-                            })
-                          }
-                        />
-                        ms after
-                      </label>
-                      <label className="flex items-center gap-1 text-[11px] text-mute">
-                        <input
-                          type="checkbox"
-                          checked={field.after?.blur ?? false}
-                          onChange={(e) =>
-                            updateField(field.id, { after: { ...field.after, blur: e.target.checked } })
-                          }
-                        />
-                        blur
-                      </label>
-                      <input
-                        className="field field-mono field-sm min-w-[6rem] flex-1"
-                        value={field.framePattern ?? ''}
-                        onChange={(e) => updateField(field.id, { framePattern: e.target.value || undefined })}
-                        placeholder="frame URL contains…"
-                      />
-                      <button
-                        className="btn-link btn-danger"
-                        onClick={() =>
-                          onChange({ ...active, fields: active.fields.filter((item) => item.id !== field.id) })
-                        }
-                      >
-                        remove field
-                      </button>
+                      {field.source.kind !== 'literal' && preview[field.key] !== undefined && (
+                        <p className="m-0 truncate px-2 pb-1.5 pl-[2.1rem] font-mono text-[10.5px] text-faint">
+                          → {preview[field.key]}
+                        </p>
+                      )}
+
+                      {openId === field.id && (
+                        <div className="space-y-2 border-t border-line bg-inset p-2">
+                          <p className="eyebrow m-0">Selectors — first unique match wins</p>
+                          {field.selectors.map((selector, index) => (
+                            <div key={index} className="flex gap-1.5">
+                              <select
+                                className="field field-sm !w-auto"
+                                value={selector.strategy}
+                                onChange={(e) =>
+                                  updateSelector(field, index, {
+                                    strategy: e.target.value as FieldStrategy,
+                                  })
+                                }
+                                aria-label="Strategy"
+                              >
+                                {STRATEGIES.map((strategy) => (
+                                  <option key={strategy} value={strategy}>
+                                    {strategy}
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                className="field field-mono field-sm min-w-0 flex-1"
+                                value={selector.value}
+                                onChange={(e) => updateSelector(field, index, { value: e.target.value })}
+                                placeholder={selector.strategy === 'css' ? '#email' : 'value'}
+                                aria-label="Selector value"
+                              />
+                              <button
+                                className="btn btn-sm btn-icon btn-ghost btn-danger"
+                                title="Remove this selector"
+                                onClick={() =>
+                                  updateField(field.id, {
+                                    selectors: field.selectors.filter((_, i) => i !== index),
+                                  })
+                                }
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                          <div className="flex gap-3">
+                            <button
+                              className="btn-link"
+                              onClick={() =>
+                                updateField(field.id, {
+                                  selectors: [...field.selectors, { strategy: 'css', value: '' }],
+                                })
+                              }
+                            >
+                              Add fallback
+                            </button>
+                            <button className="btn-link" onClick={() => onPick(field.id)}>
+                              Pick from page
+                            </button>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2.5 border-t border-line pt-2">
+                            <label className="flex items-center gap-1 text-[11px] text-mute">
+                              wait
+                              <input
+                                type="number"
+                                className="field field-sm w-14"
+                                value={field.after?.waitMs ?? ''}
+                                onChange={(e) =>
+                                  updateField(field.id, {
+                                    after: { ...field.after, waitMs: Number(e.target.value) || undefined },
+                                  })
+                                }
+                              />
+                              ms after
+                            </label>
+                            <label className="flex items-center gap-1 text-[11px] text-mute">
+                              <input
+                                type="checkbox"
+                                checked={field.after?.blur ?? false}
+                                onChange={(e) =>
+                                  updateField(field.id, {
+                                    after: { ...field.after, blur: e.target.checked },
+                                  })
+                                }
+                              />
+                              blur
+                            </label>
+                            <input
+                              className="field field-mono field-sm min-w-[6rem] flex-1"
+                              value={field.framePattern ?? ''}
+                              onChange={(e) =>
+                                updateField(field.id, { framePattern: e.target.value || undefined })
+                              }
+                              placeholder="frame URL contains…"
+                              aria-label="Frame pattern"
+                            />
+                            <button
+                              className="btn-link btn-danger"
+                              onClick={() =>
+                                onChange({
+                                  ...active,
+                                  fields: active.fields.filter((item) => item.id !== field.id),
+                                })
+                              }
+                            >
+                              Remove field
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                )}
-              </div>
-            ))}
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-1.5">
+              <button
+                className="btn btn-sm btn-secondary"
+                onClick={() => onChange({ ...active, fields: [...active.fields, newField()] })}
+              >
+                <IconPlus />
+                Add field
+              </button>
+              <button className="btn btn-sm btn-secondary" onClick={() => onPick()}>
+                <IconTarget />
+                Pick from page
+              </button>
+              <button className="btn btn-sm btn-ghost" onClick={onRecord} title="Read the form as filled">
+                Read the page
+              </button>
+            </div>
           </div>
 
-          <div className="flex gap-2">
-            <button
-              className="btn btn-ghost"
-              onClick={() => onChange({ ...active, fields: [...active.fields, newField()] })}
-            >
-              + Add field
-            </button>
-            <button className="btn btn-ghost" onClick={() => onPick()}>
-              Pick
-            </button>
-            <button onClick={onFill} className="btn btn-primary flex-1">
-              Fill form
+          <div className="shrink-0 border-t border-line bg-surface p-2">
+            <button onClick={onFill} disabled={disabled} className="btn btn-lg btn-primary w-full">
+              Fill {enabledCount} field{enabledCount === 1 ? '' : 's'} on the page
             </button>
           </div>
-        </div>
+        </>
       )}
     </div>
   );

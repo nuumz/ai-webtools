@@ -44,8 +44,14 @@ export function setRecording(tabId: number, next: boolean): boolean {
   return true;
 }
 
-export async function restoreArmedTabs(): Promise<void> {
-  await Promise.all([restoreSet(ARMED_KEY, armed), restoreSet(RECORDING_KEY, recording)]);
+let restored: Promise<void> | undefined;
+
+/** Safe to call repeatedly: every caller awaits the same session read. */
+export function restoreArmedTabs(): Promise<void> {
+  restored ??= Promise.all([restoreSet(ARMED_KEY, armed), restoreSet(RECORDING_KEY, recording)]).then(
+    () => undefined,
+  );
+  return restored;
 }
 
 async function restoreSet(key: string, target: Set<number>): Promise<void> {

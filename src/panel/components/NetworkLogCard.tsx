@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { KeyboardEvent, PointerEvent } from 'react';
 import ExchangeDetail from './ExchangeDetail';
+import { IconChecklist, IconClear, IconRecord, IconSearch, IconStop } from './icons';
+import { durationColor, formatClock, formatDuration } from '../format';
 import type { ExchangeMeta } from '../../shared/capture';
 import type { StoryMeta } from '../../shared/story';
 import type { NetworkLogState } from '../hooks/useNetworkLog';
 import type { RuleDraft } from './RuleForm';
-import { durationColor, formatClock, formatDuration } from '../format';
 
 const NEW_STORY = '__new__';
+const PANE_MIN = 120;
 
 interface Props {
   log: NetworkLogState;
@@ -14,7 +17,10 @@ interface Props {
   stories: StoryMeta[];
   onToggleCapture: () => void;
   onCreateRule: (draft: RuleDraft) => void;
-  onSaveToStory: (exchangeIds: string[], target: { storyId?: string; name?: string }) => Promise<void>;
+  onSaveToStory: (
+    exchangeIds: string[],
+    target: { storyId?: string; name?: string },
+  ) => Promise<void>;
 }
 
 export default function NetworkLogCard({
@@ -26,209 +32,306 @@ export default function NetworkLogCard({
   onSaveToStory,
 }: Props) {
   const [filter, setFilter] = useState('');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selecting, setSelecting] = useState(false);
-  const [selected, setSelected] = useState<string[]>([]);
+  const [marked, setMarked] = useState<string[]>([]);
   const [target, setTarget] = useState<string>(NEW_STORY);
   const [newName, setNewName] = useState('');
   const [saving, setSaving] = useState(false);
+  const [paneHeight, setPaneHeight] = useState(260);
+  const listRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
-  const toggleSelected = (id: string) =>
-    setSelected((current) =>
+  const visible = useMemo(() => {
+    const needle = filter.trim().toLowerCase();
+    const rows = needle
+      ? log.entries.filter((e) => e.url.toLowerCase().includes(needle))
+      : log.entries;
+    return [...rows].reverse();
+  }, [log.entries, filter]);
+
+  const selected = visible.find((exchange) => exchange.id === selectedId);
+  const inFlight = log.entries.some((exchange) => exchange.outcome === 'pending');
+
+  // A request that has not answered yet shows its elapsed time counting up, so a
+  // hung endpoint is visible as such instead of sitting at a frozen dash. The
+  // interval only exists while something is actually in flight.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!inFlight) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 150);
+    return () => window.clearInterval(timer);
+  }, [inFlight]);
+
+  // A row that scrolls out of the log — or gets filtered away — must not leave a
+  // detail pane describing something the user can no longer see in the list.
+  useEffect(() => {
+    if (selectedId && !selected) setSelectedId(null);
+  }, [selectedId, selected]);
+
+  const toggleMarked = (id: string) =>
+    setMarked((current) =>
       current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id],
     );
 
   const save = async () => {
-    if (selected.length === 0 || saving) return;
+    if (marked.length === 0 || saving) return;
     setSaving(true);
     try {
       await onSaveToStory(
-        selected,
+        marked,
         target === NEW_STORY ? { name: newName.trim() || 'Story' } : { storyId: target },
       );
-      setSelected([]);
+      setMarked([]);
       setNewName('');
     } finally {
       setSaving(false);
     }
   };
 
-  const visible = useMemo(() => {
-    const needle = filter.trim().toLowerCase();
-    const rows = needle ? log.entries.filter((e) => e.url.toLowerCase().includes(needle)) : log.entries;
-    return [...rows].reverse();
-  }, [log.entries, filter]);
+  /** ↑/↓ walks the log the way a devtools list should; Esc drops the pane. */
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') {
+      setSelectedId(null);
+      return;
+    }
+    const step = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0;
+    if (step === 0 || visible.length === 0) return;
+    event.preventDefault();
+    const at = visible.findIndex((exchange) => exchange.id === selectedId);
+    const next = at === -1 ? (step > 0 ? 0 : visible.length - 1) : at + step;
+    const row = visible[Math.max(0, Math.min(visible.length - 1, next))];
+    setSelectedId(row.id);
+    listRef.current?.querySelector(`[data-row="${row.id}"]`)?.scrollIntoView({ block: 'nearest' });
+  };
 
-  const waiting = visible.some((exchange) => exchange.outcome === 'pending');
-  const [now, setNow] = useState(() => Date.now());
+  const startResize = useCallback(
+    (event: PointerEvent) => {
+      event.preventDefault();
+      const startY = event.clientY;
+      const startHeight = paneHeight;
+      const ceiling = () => Math.max(PANE_MIN, (bodyRef.current?.clientHeight ?? 600) - 140);
 
-  // A request that has not answered yet is the one whose timing matters most, so
-  // its clock keeps running; nothing ticks once every row has landed.
-  useEffect(() => {
-    if (!waiting) return;
-    const timer = setInterval(() => setNow(Date.now()), 250);
-    return () => clearInterval(timer);
-  }, [waiting]);
-
-  const slowest = visible.reduce((peak, exchange) => Math.max(peak, elapsedOf(exchange, now)), 0);
+      const move = (moveEvent: globalThis.PointerEvent) => {
+        const next = startHeight + (startY - moveEvent.clientY);
+        setPaneHeight(Math.max(PANE_MIN, Math.min(ceiling(), next)));
+      };
+      const stop = () => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', stop);
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', stop);
+    },
+    [paneHeight],
+  );
 
   return (
-    <div className="panel-card flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
-        <p className="m-0 text-[11px] text-faint">
-          {log.entries.length === 1 ? '1 request' : `${log.entries.length} requests`}
-          {slowest > 0 && (
-            <span className={durationColor(slowest)}> · slowest {formatDuration(slowest)}</span>
-          )}
-          {log.dropped > 0 && <span className="text-warn"> · {log.dropped} dropped</span>}
-        </p>
-        <div className="flex gap-1.5">
-          <button
-            onClick={onToggleCapture}
-            className={`btn ${capturing ? 'btn-live' : 'btn-secondary'}`}
-          >
-            {capturing ? 'Recording' : 'Record'}
-          </button>
-          {capturing && log.entries.length > 0 && (
-            <button
-              onClick={() => {
-                setSelecting((on) => !on);
-                setSelected([]);
-              }}
-              className={`btn btn-ghost ${selecting ? 'is-on' : ''}`}
-            >
-              Select
-            </button>
-          )}
-          <button onClick={log.clear} className="btn btn-ghost">
-            Clear
-          </button>
-        </div>
-      </div>
+    <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col">
+      <div className="toolbar">
+        <button
+          onClick={onToggleCapture}
+          className={`btn btn-sm ${capturing ? 'btn-live' : 'btn-secondary'}`}
+          title={capturing ? 'Stop capturing this tab' : 'Capture this tab’s traffic'}
+        >
+          {capturing ? <IconStop /> : <IconRecord className="text-bad" />}
+          {capturing ? 'Stop' : 'Record'}
+        </button>
 
-      {capturing && (
-        <div className="px-3 pt-2">
+        <div className="relative min-w-0 flex-1">
+          <IconSearch className="pointer-events-none absolute top-1/2 left-2 -translate-y-1/2 text-faint" />
           <input
-            className="field field-mono field-sm"
-            placeholder="Filter by URL…"
+            className="field field-mono field-sm !pl-7"
+            placeholder="Filter by URL"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
           />
         </div>
-      )}
 
-      <div className="flex min-h-0 flex-1 flex-col p-3">
+        <span className="shrink-0 font-mono text-[10.5px] tabular-nums text-faint">
+          {filter.trim() ? `${visible.length}/${log.entries.length}` : log.entries.length}
+        </span>
+        {log.dropped > 0 && (
+          <span className="chip chip-warn" title="Requests the log could not keep">
+            {log.dropped} dropped
+          </span>
+        )}
+
+        <button
+          onClick={() => {
+            setSelecting((on) => !on);
+            setMarked([]);
+          }}
+          disabled={log.entries.length === 0}
+          aria-pressed={selecting}
+          className={`btn btn-sm btn-icon ${selecting ? 'btn-on' : 'btn-ghost'}`}
+          title="Pick responses to save as a story"
+        >
+          <IconChecklist />
+        </button>
+        <button
+          onClick={log.clear}
+          disabled={log.entries.length === 0}
+          className="btn btn-sm btn-icon btn-ghost"
+          title="Clear the log"
+        >
+          <IconClear />
+        </button>
+      </div>
+
+      <div
+        ref={listRef}
+        role="listbox"
+        tabIndex={0}
+        aria-label="Captured requests"
+        onKeyDown={onKeyDown}
+        className="min-h-0 flex-1 overflow-y-auto focus:outline-none"
+      >
         {!capturing ? (
-          <p className="panel-empty">
-            Recording is off — turn it on, then reload the page to see its traffic.
+          <p className="empty">
+            Not capturing this tab.
+            <br />
+            <button onClick={onToggleCapture} className="btn btn-sm btn-secondary mt-3">
+              <IconRecord className="text-bad" />
+              Start recording
+            </button>
+            <br />
+            <span className="mt-2 inline-block text-faint">
+              Then reload the page to see its traffic.
+            </span>
           </p>
         ) : visible.length === 0 ? (
-          <p className="panel-empty">No requests yet on this tab.</p>
+          <p className="empty">
+            {log.entries.length === 0
+              ? 'Nothing captured yet on this tab.'
+              : `No request matches “${filter.trim()}”.`}
+          </p>
         ) : (
-          <ul className="min-h-0 flex-1 overflow-y-auto rounded-[var(--radius-md)] border border-line">
-            {visible.map((exchange) => (
-              <li key={exchange.id} className="border-b border-line last:border-b-0">
-                <div className="flex items-center gap-2 px-2 hover:bg-raised/60">
+          <ul className="m-0 list-none p-0">
+            {visible.map((exchange) => {
+              const replayable = exchange.servedBy === 'network' && exchange.outcome !== 'pending';
+              const pending = exchange.outcome === 'pending';
+              const elapsed = pending ? Math.max(0, now - exchange.startedAt) : exchange.durationMs;
+              return (
+                <li
+                  key={exchange.id}
+                  data-row={exchange.id}
+                  role="option"
+                  aria-selected={exchange.id === selectedId}
+                  onClick={() => setSelectedId(exchange.id === selectedId ? null : exchange.id)}
+                  className="log-row border-b border-line/60"
+                >
                   {selecting && (
                     <input
                       type="checkbox"
                       className="shrink-0 disabled:opacity-30"
-                      checked={selected.includes(exchange.id)}
-                      onChange={() => toggleSelected(exchange.id)}
-                      disabled={exchange.servedBy !== 'network' || exchange.outcome === 'pending'}
+                      checked={marked.includes(exchange.id)}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={() => toggleMarked(exchange.id)}
+                      disabled={!replayable}
                       title={
                         exchange.outcome === 'pending'
                           ? 'Still in flight'
-                          : exchange.servedBy === 'network'
-                            ? 'Select for a story'
-                            : 'Already served by a mock — only real responses can be recorded'
+                          : replayable
+                            ? 'Save this response to a story'
+                            : 'Served by a mock — only real responses can be recorded'
                       }
                     />
                   )}
-                  <button
-                    onClick={() => setExpandedId(expandedId === exchange.id ? null : exchange.id)}
-                    className="min-w-0 flex-1 py-1.5 text-left"
+                  <span className="log-cell w-9 font-semibold text-mute">{exchange.method}</span>
+                  <span className={`log-cell w-7 font-semibold ${statusColor(exchange)}`}>
+                    {exchange.outcome === 'pending' && !exchange.status
+                      ? '···'
+                      : exchange.status || '—'}
+                  </span>
+                  <span
+                    className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink"
+                    title={exchange.url}
                   >
-                    <span className="flex items-center gap-2">
-                      <span className="w-9 shrink-0 font-mono text-[10px] font-semibold tabular-nums text-mute">
-                        {exchange.method}
-                      </span>
-                      <span
-                        className={`w-8 shrink-0 font-mono text-[10px] font-semibold tabular-nums ${statusColor(exchange)}`}
-                      >
-                        {exchange.outcome === 'pending' && !exchange.status ? '…' : exchange.status || '—'}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink" title={exchange.url}>
-                        {exchange.pathname}
-                        {exchange.search && <span className="text-faint">{exchange.search}</span>}
-                      </span>
-                      {exchange.outcome === 'pending' && (
-                        <span className="chip chip-pending shrink-0">in progress</span>
-                      )}
-                      {exchange.servedBy !== 'network' && <ServedByChip servedBy={exchange.servedBy} />}
-                    </span>
-                    <span className="flex items-center gap-1.5 pl-[4.6rem] font-mono text-[10px] tabular-nums text-faint">
-                      <span title={new Date(exchange.startedAt).toLocaleString()}>
-                        {formatClock(exchange.startedAt)}
-                      </span>
-                      <DurationBar
-                        ms={elapsedOf(exchange, now)}
-                        slowest={slowest}
-                        pending={exchange.outcome === 'pending'}
-                      />
-                      <span className={durationColor(elapsedOf(exchange, now))}>
-                        {formatDuration(elapsedOf(exchange, now))}
-                      </span>
-                      {exchange.resBytes > 0 && <span>· {formatBytes(exchange.resBytes)}</span>}
-                      {exchange.transport === 'xhr' && <span>· XHR</span>}
-                    </span>
-                  </button>
-                </div>
-                {expandedId === exchange.id && (
-                  <ExchangeDetail
-                    exchange={exchange}
-                    bodies={log.bodies[exchange.id]}
-                    onLoadBody={log.loadBody}
-                    onCreateRule={onCreateRule}
-                  />
-                )}
-              </li>
-            ))}
+                    {exchange.pathname}
+                    {exchange.search && <span className="text-faint">{exchange.search}</span>}
+                  </span>
+                  {exchange.transport === 'xhr' && <span className="log-cell text-faint">xhr</span>}
+                  {exchange.servedBy !== 'network' && <ServedByChip servedBy={exchange.servedBy} />}
+                  {pending && <span className="chip chip-pending">live</span>}
+                  <span className="log-cell text-faint" title="Started at">
+                    {formatClock(exchange.startedAt)}
+                  </span>
+                  <span
+                    className={`log-cell w-14 text-right ${pending ? 'text-accent' : durationColor(elapsed)}`}
+                  >
+                    {formatDuration(elapsed)}
+                  </span>
+                  <span className="log-cell w-12 text-right text-faint">
+                    {formatBytes(exchange.resBytes)}
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         )}
-
-        {selecting && selected.length > 0 && (
-          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
-            <span className="text-[11px] text-mute">{selected.length} selected →</span>
-            <select
-              className="field field-sm !w-auto"
-              value={target}
-              onChange={(e) => setTarget(e.target.value)}
-            >
-              <option value={NEW_STORY}>New story</option>
-              {stories.map((story) => (
-                <option key={story.id} value={story.id}>
-                  {story.name}
-                </option>
-              ))}
-            </select>
-            {target === NEW_STORY && (
-              <input
-                className="field field-sm min-w-[6rem] flex-1"
-                placeholder="Story name"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-              />
-            )}
-            <button onClick={save} disabled={saving} className="btn btn-primary">
-              {saving ? 'Saving…' : 'Save to story'}
-            </button>
-            <button onClick={() => setSelected([])} className="btn-link">
-              Cancel
-            </button>
-          </div>
-        )}
       </div>
+
+      {selecting && marked.length > 0 && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-line bg-surface px-2 py-2">
+          <span className="text-[11px] text-mute">{marked.length} to save</span>
+          <select
+            className="field field-sm !w-auto"
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+          >
+            <option value={NEW_STORY}>New story…</option>
+            {stories.map((story) => (
+              <option key={story.id} value={story.id}>
+                {story.name}
+              </option>
+            ))}
+          </select>
+          {target === NEW_STORY && (
+            <input
+              className="field field-sm min-w-[6rem] flex-1"
+              placeholder="Story name"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+            />
+          )}
+          <button onClick={save} disabled={saving} className="btn btn-sm btn-primary">
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button onClick={() => setMarked([])} className="btn-link">
+            Clear pick
+          </button>
+        </div>
+      )}
+
+      {selected && (
+        <>
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            tabIndex={0}
+            onPointerDown={startResize}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowUp') setPaneHeight((h) => h + 24);
+              if (event.key === 'ArrowDown') setPaneHeight((h) => Math.max(PANE_MIN, h - 24));
+            }}
+            title="Drag to resize"
+            className="pane-grip"
+          />
+          <div
+            style={{ height: paneHeight }}
+            className="shrink-0 overflow-y-auto bg-surface shadow-[var(--shadow-pane)]"
+          >
+            <ExchangeDetail
+              exchange={selected}
+              bodies={log.bodies[selected.id]}
+              onLoadBody={log.loadBody}
+              onCreateRule={onCreateRule}
+              onClose={() => setSelectedId(null)}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -239,7 +342,7 @@ function ServedByChip({ servedBy }: { servedBy: ExchangeMeta['servedBy'] }) {
     stub: '',
     mutated: 'chip-accent',
   };
-  return <span className={`chip shrink-0 ${styles[servedBy] ?? ''}`}>{servedBy}</span>;
+  return <span className={`chip ${styles[servedBy] ?? ''}`}>{servedBy}</span>;
 }
 
 function statusColor(exchange: ExchangeMeta): string {
@@ -255,29 +358,4 @@ function formatBytes(bytes: number): string {
   if (!bytes) return '';
   if (bytes < 1024) return `${bytes} B`;
   return `${Math.round(bytes / 1024)} KB`;
-}
-
-/** A request still in flight has no duration yet — its clock is the useful number. */
-function elapsedOf(exchange: ExchangeMeta, now: number): number {
-  if (exchange.outcome !== 'pending') return exchange.durationMs;
-  return Math.max(0, now - exchange.startedAt);
-}
-
-/** Length relative to the slowest request on screen: the shape answers "is this the slow one?". */
-function DurationBar({ ms, slowest, pending }: { ms: number; slowest: number; pending: boolean }) {
-  const share = slowest > 0 ? Math.min(1, ms / slowest) : 0;
-  return (
-    <span className="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-raised" aria-hidden>
-      <span
-        className={`block h-full rounded-full ${pending ? 'animate-pulse' : ''} ${barColor(ms)}`}
-        style={{ width: `${Math.max(share * 100, ms > 0 ? 6 : 0)}%` }}
-      />
-    </span>
-  );
-}
-
-function barColor(ms: number): string {
-  if (ms >= 3000) return 'bg-bad';
-  if (ms >= 1000) return 'bg-warn';
-  return 'bg-accent';
 }

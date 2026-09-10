@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { IconChevron } from './icons';
 import type { PathOp } from '../../shared/pathOps';
 import type { HttpMethod, MutationRule, RuleType } from '../../shared/types';
 
@@ -109,15 +110,15 @@ export default function RuleForm({ editing, initialDraft, onSubmit, onCancel }: 
   };
 
   return (
-    <div className="panel-card mb-3 p-3.5">
-      <h2 className="mb-3 border-b border-line pb-2 text-[13px] font-semibold">
+    <div className="card p-3">
+      <h2 className="eyebrow m-0 mb-3 border-b border-line pb-1.5">
         {editing ? 'Edit rule' : 'New rule'}
       </h2>
 
       <div className="space-y-3">
-        <div className="flex gap-2">
+        <div className="flex gap-1.5">
           <select
-            className="field flex-1"
+            className="field min-w-0 flex-1"
             value={type}
             onChange={(e) => setType(e.target.value as RuleType)}
           >
@@ -150,7 +151,7 @@ export default function RuleForm({ editing, initialDraft, onSubmit, onCancel }: 
 
         {type === 'STUB' && (
           <label className="flex items-center gap-2 text-[12px] text-mute">
-            <span className="font-medium">Status code</span>
+            <span>Answer with status</span>
             <input
               type="number"
               className="field field-mono field-sm w-24"
@@ -161,8 +162,8 @@ export default function RuleForm({ editing, initialDraft, onSubmit, onCancel }: 
         )}
 
         <div>
-          <label className="mb-1 block text-[11px] font-medium text-mute">
-            {type === 'STUB' ? 'Payload (returned as-is)' : 'Payload (JSON to merge/override)'}
+          <label className="eyebrow mb-1 block">
+            {type === 'STUB' ? 'Payload — returned as-is' : 'Payload — merged over the real one'}
           </label>
           <textarea
             className="field field-mono field-area"
@@ -172,8 +173,13 @@ export default function RuleForm({ editing, initialDraft, onSubmit, onCancel }: 
           />
         </div>
 
-        <button onClick={() => setAdvanced((open) => !open)} className="btn-link">
-          {advanced ? '▾' : '▸'} Timing, failures and field edits
+        <button
+          onClick={() => setAdvanced((open) => !open)}
+          aria-expanded={advanced}
+          className="btn-link"
+        >
+          <IconChevron className={`transition-transform ${advanced ? 'rotate-90' : ''}`} />
+          Timing, failures and field edits
         </button>
 
         {advanced && (
@@ -226,7 +232,7 @@ export default function RuleForm({ editing, initialDraft, onSubmit, onCancel }: 
             </div>
 
             <div>
-              <label className="mb-1 block text-[11px] font-medium text-faint">
+              <label className="eyebrow mb-1 block">
                 Field edits — JSON array, e.g.{' '}
                 <code className="font-mono">{`[{"op":"set","path":"items[0].price","value":0}]`}</code>
               </label>
@@ -241,14 +247,18 @@ export default function RuleForm({ editing, initialDraft, onSubmit, onCancel }: 
           </div>
         )}
 
-        {error && <p className="m-0 text-[12px] text-bad">{error}</p>}
+        {error && (
+          <p className="m-0 rounded-[var(--radius-md)] border border-[var(--bad-line)] bg-bad-soft px-2 py-1.5 text-[11px] text-bad">
+            {error}
+          </p>
+        )}
 
-        <div className="flex gap-2">
-          <button onClick={handleSubmit} className="btn btn-primary flex-1 !h-9">
+        <div className="flex gap-1.5">
+          <button onClick={handleSubmit} className="btn btn-lg btn-primary flex-1">
             {editing ? 'Update rule' : 'Save rule'}
           </button>
           {onCancel && (
-            <button onClick={onCancel} className="btn btn-ghost !h-9">
+            <button onClick={onCancel} className="btn btn-lg btn-secondary">
               Cancel
             </button>
           )}

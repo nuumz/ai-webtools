@@ -27,13 +27,19 @@ export default function RecordedFieldsDialog({
     );
 
   return (
-    <div className="absolute inset-0 z-10 flex items-end bg-[oklch(8%_0.02_75/0.55)]" onClick={onCancel}>
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Fields found on the page"
+      className="absolute inset-0 z-30 flex items-end bg-[oklch(20%_0.02_260/0.45)]"
+      onClick={onCancel}
+    >
       <div
-        className="flex max-h-[75%] w-full flex-col rounded-t-[var(--radius-lg)] border border-b-0 border-line bg-surface shadow-[0_-12px_32px_oklch(0%_0_0/0.4)]"
+        className="flex max-h-[75%] w-full flex-col rounded-t-[var(--radius-lg)] border border-b-0 border-line bg-surface shadow-[var(--shadow-float)]"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-line p-3">
-          <h3 className="m-0 text-[13px] font-semibold text-ink">Fields found on the page</h3>
+        <div className="toolbar rounded-t-[var(--radius-lg)]">
+          <h3 className="m-0 flex-1 text-[12px] font-semibold text-ink">Fields found on the page</h3>
           <label className="flex items-center gap-1.5 text-[11px] text-mute">
             <input
               type="checkbox"
@@ -44,16 +50,16 @@ export default function RecordedFieldsDialog({
           </label>
         </div>
 
-        <div className="flex-1 space-y-1.5 overflow-y-auto p-3">
+        <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-2">
           {fields.length === 0 ? (
-            <p className="panel-empty">
+            <p className="empty">
               Nothing filled in on this page yet — type into the form first, then record.
             </p>
           ) : (
             fields.map((field, index) => (
               <label
                 key={index}
-                className="flex items-start gap-2 rounded-[var(--radius-md)] border border-line p-2 text-[11px]"
+                className="flex items-start gap-2 rounded-[var(--radius-md)] border border-line p-2 text-[11px] hover:border-line-strong"
               >
                 <input
                   type="checkbox"
@@ -73,15 +79,15 @@ export default function RecordedFieldsDialog({
           )}
         </div>
 
-        <div className="flex gap-2 border-t border-line p-3">
+        <div className="flex shrink-0 gap-1.5 border-t border-line p-2">
           <button
             onClick={() => onAdd(chosen.map((index) => fields[index]).filter(Boolean))}
             disabled={chosen.length === 0}
-            className="btn btn-primary flex-1 !h-9"
+            className="btn btn-lg btn-primary flex-1"
           >
-            Add {chosen.length} field(s)
+            Add {chosen.length} field{chosen.length === 1 ? '' : 's'}
           </button>
-          <button onClick={onCancel} className="btn btn-ghost !h-9">
+          <button onClick={onCancel} className="btn btn-lg btn-secondary">
             Cancel
           </button>
         </div>

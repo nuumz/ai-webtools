@@ -103,7 +103,7 @@ function install(): void {
 
   const stored = readStoredConfig();
   if (stored) applyConfig(stored);
-  else if (readArmedFlag() && readCaptureFlag()) {
+  if (readArmedFlag() && readCaptureFlag()) {
     settings = { ...settings, captureEnabled: true };
   }
 
@@ -163,7 +163,8 @@ function install(): void {
     }
   };
 
-  const capturing = (): boolean => settings.captureEnabled;
+  const capturing = (): boolean =>
+    settings.captureEnabled || (readArmedFlag() && readCaptureFlag());
 
   const emit = (exchange: CapturedExchange, immediate = false): void => {
     if (!capturing()) return;
@@ -216,6 +217,8 @@ function install(): void {
     settings.enabled ? findRule(activeRules, url, method) : undefined;
 
   const BODY_TIMEOUT_MS = 3000;
+  /** How long a response body may keep streaming before the log gives up on it. */
+  const BODY_READ_TIMEOUT_MS = 15_000;
 
   /** Asks the ISOLATED bridge for a stored body; resolves undefined if it cannot be had. */
   const fetchStoredBody = (bodyKey: string): Promise<string | undefined> => {
@@ -347,17 +350,22 @@ function install(): void {
     const requestHeaders = capture ? readRequestHeaders(input, init) : undefined;
     let requestText = capture ? await readRequestBody(input, init) : undefined;
 
+    /**
+     * `durationMs` is pinned by the caller once the response is in the page's
+     * hands: a later body update must not stretch the number the panel shows.
+     */
     const finish = (
       response: Response | undefined,
       servedBy: ServedBy,
       outcome: Outcome,
       responseText?: string,
+      durationMs = Math.round(performance.now() - started),
     ): void => {
       if (!capture) return;
       emit({
         id,
         startedAt,
-        durationMs: Math.round(performance.now() - started),
+        durationMs,
         transport: 'fetch',
         servedBy,
         outcome,
@@ -524,15 +532,23 @@ function install(): void {
     }
 
     if (capture) {
-      // The clone must be consumed or Chrome retains its buffer for the life of
-      // the response, so read it (capped) off the return path and never await it.
+      // The request is over the moment the page has its response: an SSE channel,
+      // a keep-alive proxy or a body the app never reads can keep the stream open
+      // for minutes, and the row must not sit "in progress" for all of it.
+      const durationMs = Math.round(performance.now() - started);
+      finish(response, 'network', 'ok', undefined, durationMs);
+
+      // The clone must still be consumed or Chrome retains its buffer for the
+      // life of the response; the body lands as an update on the same row.
       if (isCapturableContentType(response.headers.get('content-type') ?? '')) {
         const clone = response.clone();
-        void readCapped(clone, settings.captureBodyLimit)
-          .then((text) => finish(response, 'network', 'ok', text))
-          .catch(() => finish(response, 'network', 'ok'));
-      } else {
-        finish(response, 'network', 'ok');
+        void readCapped(clone, settings.captureBodyLimit, BODY_READ_TIMEOUT_MS)
+          .then((read) => {
+            // A body that never finished is not a body: storing the fragment
+            // would look complete and stub as broken JSON.
+            if (read.complete) finish(response, 'network', 'ok', read.text, durationMs);
+          })
+          .catch(() => undefined);
       }
     }
 
@@ -908,28 +924,45 @@ function install(): void {
   window.XMLHttpRequest = MutatedXHR as unknown as typeof XMLHttpRequest;
 }
 
-/** Reads at most `limit` characters from a response clone, cancelling the rest. */
-async function readCapped(response: Response, limit: number): Promise<string> {
+/**
+ * Reads at most `limit` characters from a response clone, cancelling the rest.
+ * `complete` is false when the stream outlived `timeoutMs` — the caller keeps
+ * the row but drops the fragment, since a half-read body reads as a whole one.
+ */
+async function readCapped(
+  response: Response,
+  limit: number,
+  timeoutMs: number,
+): Promise<{ text: string; complete: boolean }> {
   const body = response.body;
-  if (!body) return response.text();
+  if (!body) return { text: await response.text(), complete: true };
 
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let text = '';
+  let timedOut = false;
+  const deadline = setTimeout(() => {
+    timedOut = true;
+    void reader.cancel().catch(() => undefined);
+  }, timeoutMs);
+
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (timedOut) return { text, complete: false };
       text += decoder.decode(value, { stream: true });
       if (text.length > limit) {
         void reader.cancel();
-        return text;
+        return { text, complete: true };
       }
     }
   } catch {
-    return text;
+    return { text, complete: !timedOut };
+  } finally {
+    clearTimeout(deadline);
   }
-  return text + decoder.decode();
+  return timedOut ? { text, complete: false } : { text: text + decoder.decode(), complete: true };
 }
 
 function readRequestHeaders(

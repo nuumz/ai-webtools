@@ -129,6 +129,50 @@ export default async function run() {
 
   // The panel itself, with real chrome APIs: proves the per-tab subscription and
   // that a captured row renders its timing rather than an empty cell.
+  // A form or an API call inside a srcdoc/about:blank frame is invisible without
+  // match_about_blank + match_origin_as_fallback: the content scripts never run there.
+  await page.evaluate(() => {
+    const child = document.createElement('iframe');
+    child.srcdoc = '<form><input id="childField"></form>';
+    document.body.appendChild(child);
+    const blank = document.createElement('iframe');
+    document.body.appendChild(blank);
+    blank.contentDocument.body.innerHTML = '<form><input id="childField"></form>';
+  });
+  await page.waitForTimeout(500);
+
+  const installedIn = {};
+  for (const frame of page.frames()) {
+    installedIn[frame.url() || 'about:blank'] = await frame
+      .evaluate(() => Boolean(window.__DEV_TOOL_INTERCEPTOR_INSTALLED__))
+      .catch(() => 'unreachable');
+  }
+  t.check('the interceptor runs in a srcdoc frame', installedIn['about:srcdoc'], true);
+  t.check('the interceptor runs in an about:blank frame', installedIn['about:blank'], true);
+
+  const framesFilled = await worker.evaluate(async ([id]) => {
+    await chrome.scripting.executeScript({
+      target: { tabId: id, allFrames: true },
+      files: ['formAgent.js'],
+    });
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: id, allFrames: true },
+      func: (command) => window.__DEV_TOOL_FORM_AGENT__(command),
+      args: [
+        {
+          kind: 'fill',
+          fields: [
+            { key: 'childField', selectors: [{ strategy: 'id', value: 'childField' }], value: 'in a frame' },
+          ],
+        },
+      ],
+    });
+    return results.filter((entry) => entry.result?.filled?.includes('childField')).length;
+  }, [pageTabId]);
+
+  // The srcdoc frame and the about:blank one — this page has no other form.
+  t.check('auto-fill reaches every frame that has the field', framesFilled, 2);
+
   const row = panel.locator('li').first();
   const rowText = await row
     .waitFor({ timeout: 5000 })

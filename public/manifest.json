@@ -3,7 +3,7 @@
   "name": "DevTool: API Mutator & Form Filler",
   "version": "1.0.0",
   "description": "Per-tab Side Panel for API mocking, dynamic response mutation, and auto-filling forms.",
-  "minimum_chrome_version": "116",
+  "minimum_chrome_version": "119",
   "permissions": [
     "sidePanel",
     "storage",
@@ -30,7 +30,9 @@
       ],
       "run_at": "document_start",
       "all_frames": true,
-      "world": "MAIN"
+      "world": "MAIN",
+      "match_about_blank": true,
+      "match_origin_as_fallback": true
     },
     {
       "matches": [
@@ -41,7 +43,9 @@
       ],
       "run_at": "document_start",
       "all_frames": true,
-      "world": "ISOLATED"
+      "world": "ISOLATED",
+      "match_about_blank": true,
+      "match_origin_as_fallback": true
     }
   ],
   "host_permissions": [

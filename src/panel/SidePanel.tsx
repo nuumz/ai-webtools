@@ -5,6 +5,7 @@ import ProfilesCard from './components/ProfilesCard';
 import RecordedFieldsDialog from './components/RecordedFieldsDialog';
 import SettingsCard from './components/SettingsCard';
 import TabBar, { type TabId } from './components/TabBar';
+import { IconPlus, IconSettings } from './components/icons';
 import NetworkLogCard from './components/NetworkLogCard';
 import StoriesCard from './components/StoriesCard';
 import { useNetworkLog } from './hooks/useNetworkLog';
@@ -64,6 +65,8 @@ export default function SidePanel() {
   const [usage, setUsage] = useState(0);
   const [storageBusy, setStorageBusy] = useState<string | null>(null);
   const [tab, setTab] = useState<TabId>('network');
+  const [mockView, setMockView] = useState<'rules' | 'stories'>('rules');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [ruleFormOpen, setRuleFormOpen] = useState(false);
   const log = useNetworkLog();
 
@@ -196,6 +199,7 @@ export default function SidePanel() {
     // A fresh object identity is what re-hydrates the form.
     setDraft({ ...fromExchange });
     setRuleFormOpen(true);
+    setMockView('rules');
     setTab('mocks');
     showToast('Draft ready in Mocks — review, then save');
   };
@@ -203,6 +207,7 @@ export default function SidePanel() {
   const editRule = (rule: MutationRule) => {
     setEditing(rule);
     setRuleFormOpen(true);
+    setMockView('rules');
     setTab('mocks');
   };
 
@@ -429,14 +434,12 @@ export default function SidePanel() {
   const activeStories = stories.filter((story) => story.isActive).length;
 
   return (
-    <div className="relative flex h-screen flex-col bg-canvas font-sans text-[13px] text-ink">
-      <header className="shrink-0 border-b border-line bg-surface">
-        <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">
-          <span className="shrink-0 text-[13px] font-semibold tracking-tight">Dev Interceptor</span>
+    <div className="relative flex h-screen flex-col bg-canvas">
+      <header className="shrink-0">
+        <div className="toolbar">
+          <ConnectionDot tabClosed={log.tabClosed} reconnecting={reconnecting} live={settings.captureEnabled} />
           <span
-            className={`min-w-0 flex-1 truncate font-mono text-[11px] ${
-              log.tabClosed ? 'text-bad' : reconnecting ? 'text-warn' : 'text-faint'
-            }`}
+            className="min-w-0 flex-1 truncate font-mono text-[11px] text-mute"
             title={
               log.tabClosed
                 ? 'The tab this panel belongs to was closed'
@@ -452,25 +455,23 @@ export default function SidePanel() {
                 : (hostOf(log.tabUrl) ?? (log.connected ? 'waiting for the page…' : 'not connected'))}
           </span>
           <button
-            onClick={fillForm}
-            disabled={!activeProfile || log.tabClosed}
-            className="btn btn-primary shrink-0"
+            onClick={() => persistSettings({ ...settings, enabled: !settings.enabled })}
+            aria-pressed={settings.enabled}
             title={
-              log.tabClosed
-                ? 'The tab this panel belongs to was closed'
-                : activeProfile
-                  ? `Fill with ${activeProfile.name}`
-                  : 'No profile'
+              settings.enabled
+                ? `Intercepting — ${activeCount} rule(s) and ${activeStories} story(ies) armed`
+                : 'Interception is off — the page sees the real backend'
             }
+            className={`btn btn-sm ${settings.enabled ? 'btn-on' : 'btn-secondary'}`}
           >
-            Fill
+            {settings.enabled ? `Intercepting · ${activeCount + activeStories}` : 'Passthrough'}
           </button>
           <button
-            onClick={() => persistSettings({ ...settings, enabled: !settings.enabled })}
-            title={settings.enabled ? 'Interception is on' : 'Interception is off'}
-            className={`btn shrink-0 ${settings.enabled ? 'btn-secondary text-ok' : 'btn-ghost'}`}
+            onClick={() => setSettingsOpen(true)}
+            className="btn btn-sm btn-icon btn-ghost"
+            title="Settings"
           >
-            {settings.enabled ? `On · ${activeCount}` : 'Off'}
+            <IconSettings />
           </button>
         </div>
 
@@ -481,34 +482,27 @@ export default function SidePanel() {
             { id: 'network', label: 'Network', count: log.entries.length },
             { id: 'mocks', label: 'Mocks', count: activeCount + activeStories },
             { id: 'fill', label: 'Fill', count: activeProfile?.fields.length },
-            { id: 'settings', label: 'Settings' },
           ]}
         />
       </header>
 
-      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
+      <main className="relative flex min-h-0 flex-1 flex-col">
         {tab === 'network' && (
           <NetworkLogCard
             log={log}
-            capturing={log.recording}
+            capturing={settings.captureEnabled}
             stories={stories}
-            onToggleCapture={() => log.setRecording(!log.recording)}
+            onToggleCapture={() =>
+              persistSettings({ ...settings, captureEnabled: !settings.captureEnabled })
+            }
             onCreateRule={handleCreateRule}
             onSaveToStory={saveToStory}
           />
         )}
 
-        {tab === 'mocks' && (
-          <>
-            <StoriesCard
-              stories={stories}
-              onUpdate={(story) =>
-                persistStories(stories.map((item) => (item.id === story.id ? story : item)))
-              }
-              onDelete={(storyId) => void deleteStory(storyId)}
-            />
-
-            {ruleFormOpen ? (
+        {tab === 'mocks' &&
+          (ruleFormOpen ? (
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
               <RuleForm
                 editing={editing}
                 initialDraft={draft}
@@ -519,25 +513,70 @@ export default function SidePanel() {
                   setRuleFormOpen(false);
                 }}
               />
-            ) : (
-              <button
-                onClick={() => {
-                  setEditing(undefined);
-                  setRuleFormOpen(true);
-                }}
-                className="btn btn-ghost mb-3 w-full !h-9 border-dashed"
-              >
-                + New rule
-              </button>
-            )}
-
-            <div className="mb-2 flex items-baseline justify-between gap-2 px-0.5">
-              <h2 className="m-0 text-[13px] font-semibold">Rules</h2>
-              <span className="text-[11px] text-faint">{activeCount} active · {rules.length} total</span>
             </div>
-            <RuleList rules={rules} onToggle={toggleRule} onDelete={deleteRule} onEdit={editRule} />
-          </>
-        )}
+          ) : (
+            <>
+              <div className="toolbar">
+                <div className="seg" role="tablist">
+                  <button
+                    role="tab"
+                    aria-selected={mockView === 'rules'}
+                    onClick={() => setMockView('rules')}
+                    className="seg-item"
+                  >
+                    Rules
+                    <span className="tabular-nums">{rules.length}</span>
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={mockView === 'stories'}
+                    onClick={() => setMockView('stories')}
+                    className="seg-item"
+                  >
+                    Stories
+                    <span className="tabular-nums">{stories.length}</span>
+                  </button>
+                </div>
+                <span className="flex-1" />
+                <span className="text-[11px] text-faint tabular-nums">
+                  {mockView === 'rules'
+                    ? `${activeCount} active`
+                    : `${activeStories} playing`}
+                </span>
+                {mockView === 'rules' && (
+                  <button
+                    onClick={() => {
+                      setEditing(undefined);
+                      setDraft(undefined);
+                      setRuleFormOpen(true);
+                    }}
+                    className="btn btn-sm btn-secondary"
+                  >
+                    <IconPlus />
+                    New rule
+                  </button>
+                )}
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-2">
+                {mockView === 'rules' ? (
+                  <RuleList
+                    rules={rules}
+                    onToggle={toggleRule}
+                    onDelete={deleteRule}
+                    onEdit={editRule}
+                  />
+                ) : (
+                  <StoriesCard
+                    stories={stories}
+                    onUpdate={(story) =>
+                      persistStories(stories.map((item) => (item.id === story.id ? story : item)))
+                    }
+                    onDelete={(storyId) => void deleteStory(storyId)}
+                  />
+                )}
+              </div>
+            </>
+          ))}
 
         {tab === 'fill' && (
           <ProfilesCard
@@ -545,6 +584,7 @@ export default function SidePanel() {
             activeId={profileId}
             preview={previewed.values}
             errors={previewed.errors}
+            disabled={log.tabClosed}
             onSelect={setProfileId}
             onChange={updateProfile}
             onCreate={createProfile}
@@ -556,7 +596,7 @@ export default function SidePanel() {
           />
         )}
 
-        {tab === 'settings' && (
+        {settingsOpen && (
           <SettingsCard
             settings={settings}
             usageBytes={usage}
@@ -566,6 +606,7 @@ export default function SidePanel() {
             onImport={(file, mode) => void handleImport(file, mode)}
             onTrim={(maxKb) => void handleTrim(maxKb)}
             onCollectGarbage={() => void handleCollectGarbage()}
+            onClose={() => setSettingsOpen(false)}
           />
         )}
       </main>
@@ -581,12 +622,38 @@ export default function SidePanel() {
       )}
 
       {toast && (
-        <div className="absolute bottom-4 left-1/2 z-20 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-[var(--radius-md)] border border-line-strong bg-raised px-3 py-2 text-[12px] text-ink shadow-[0_8px_24px_oklch(0%_0_0/0.4)]">
+        <div
+          role="status"
+          className="pointer-events-none absolute bottom-4 left-1/2 z-30 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-[var(--radius-lg)] border border-line-strong bg-raised px-3 py-2 text-[12px] text-ink shadow-[var(--shadow-float)]"
+        >
           {toast}
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * The one place the panel says whether it is actually watching anything: red
+ * while capturing, amber while the worker reconnects, muted when idle.
+ */
+function ConnectionDot({
+  tabClosed,
+  reconnecting,
+  live,
+}: {
+  tabClosed: boolean;
+  reconnecting: boolean;
+  live: boolean;
+}) {
+  const tone = tabClosed
+    ? 'bg-bad'
+    : reconnecting
+      ? 'bg-warn'
+      : live
+        ? 'bg-bad animate-[pulse-soft_1.4s_ease-in-out_infinite]'
+        : 'bg-faint';
+  return <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${tone}`} />;
 }
 
 function hostOf(url: string | undefined): string | undefined {

@@ -6,7 +6,6 @@ const TABS: { id: TabId; label: string; count?: number }[] = [
   { id: 'network', label: 'Network', count: 7 },
   { id: 'mocks', label: 'Mocks', count: 4 },
   { id: 'fill', label: 'Fill', count: 3 },
-  { id: 'settings', label: 'Settings' },
 ];
 
 const meta = {
@@ -20,7 +19,7 @@ type Story = StoryObj<typeof meta>;
 
 export const Network: Story = {};
 export const Mocks: Story = { args: { active: 'mocks' } };
-export const Settings: Story = { args: { active: 'settings' } };
+export const Fill: Story = { args: { active: 'fill' } };
 /** Counts are optional; a fresh install has nothing to count yet. */
 export const NoCounts: Story = {
   args: { tabs: TABS.map(({ id, label }) => ({ id, label })) },

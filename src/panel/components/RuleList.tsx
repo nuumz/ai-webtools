@@ -1,4 +1,5 @@
-import type React from 'react';
+import { useState } from 'react';
+import { IconChevron } from './icons';
 import type { MutationRule } from '../../shared/types';
 
 interface Props {
@@ -8,57 +9,95 @@ interface Props {
   onEdit: (rule: MutationRule) => void;
 }
 
-const badgeFor = (rule: MutationRule) =>
-  rule.type === 'STUB' ? 'STUB' : rule.type.replace('MUTATE_', '');
-
-function Chip({ children }: { children: React.ReactNode }) {
-  return <span className="chip chip-warn">{children}</span>;
-}
+const TYPE_LABEL: Record<MutationRule['type'], string> = {
+  STUB: 'stub',
+  MUTATE_RESPONSE: 'response',
+  MUTATE_REQUEST: 'request',
+};
 
 export default function RuleList({ rules, onToggle, onDelete, onEdit }: Props) {
+  const [openId, setOpenId] = useState<string | null>(null);
+
   if (rules.length === 0) {
-    return <p className="panel-empty">No rules yet — stub from Network or add one above.</p>;
+    return (
+      <p className="empty">
+        No rules yet.
+        <br />
+        Open a request in Network, then <span className="text-mute">Make rule</span>.
+      </p>
+    );
   }
 
   return (
-    <div className="space-y-2">
-      {rules.map((rule) => (
-        <div
-          key={rule.id}
-          className={`panel-card flex flex-col gap-2 p-3 ${rule.isActive ? '' : 'opacity-50'}`}
-        >
-          <div className="flex items-center justify-between gap-2">
-            <span className="chip">
-              {rule.method} · {badgeFor(rule)}
-              {rule.type === 'STUB' && rule.status ? ` · ${rule.status}` : ''}
-            </span>
-            <div className="flex items-center gap-3">
-              <button onClick={() => onToggle(rule.id)} className="btn-link">
-                {rule.isActive ? 'Disable' : 'Enable'}
+    <div className="card overflow-hidden">
+      {rules.map((rule, index) => {
+        const open = openId === rule.id;
+        const notes = [
+          rule.delayMs ? `${rule.delayMs} ms` : undefined,
+          rule.jitterMs ? `±${rule.jitterMs} ms` : undefined,
+          rule.fault
+            ? rule.fault.kind === 'status'
+              ? `fails ${rule.fault.status}`
+              : rule.fault.kind
+            : undefined,
+          rule.ops?.length ? `${rule.ops.length} edit${rule.ops.length > 1 ? 's' : ''}` : undefined,
+        ].filter(Boolean) as string[];
+
+        return (
+          <div key={rule.id} className={index > 0 ? 'border-t border-line' : undefined}>
+            <div className={`flex items-center gap-2 px-2 py-1.5 ${rule.isActive ? '' : 'opacity-55'}`}>
+              <input
+                type="checkbox"
+                checked={rule.isActive}
+                onChange={() => onToggle(rule.id)}
+                title={rule.isActive ? 'Active — click to pause' : 'Paused — click to activate'}
+              />
+              <span className={`chip ${rule.type === 'STUB' ? 'chip-accent' : ''}`}>
+                {TYPE_LABEL[rule.type]}
+                {rule.type === 'STUB' && rule.status ? ` ${rule.status}` : ''}
+              </span>
+              <span className="log-cell w-9 font-semibold text-mute">{rule.method}</span>
+              <button
+                onClick={() => setOpenId(open ? null : rule.id)}
+                className="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-ink"
+                title={rule.urlPattern}
+              >
+                {rule.urlPattern}
               </button>
-              <button onClick={() => onEdit(rule)} className="btn-link">
-                Edit
-              </button>
-              <button onClick={() => onDelete(rule.id)} className="btn-link btn-danger">
-                Delete
+              {notes.map((note) => (
+                <span key={note} className="chip chip-warn">
+                  {note}
+                </span>
+              ))}
+              <button
+                onClick={() => setOpenId(open ? null : rule.id)}
+                className="btn btn-sm btn-icon btn-ghost"
+                aria-expanded={open}
+                title={open ? 'Hide payload' : 'Show payload'}
+              >
+                <IconChevron className={`transition-transform ${open ? 'rotate-90' : ''}`} />
               </button>
             </div>
+
+            {open && (
+              <div className="space-y-2 border-t border-line bg-inset p-2">
+                <p className="eyebrow m-0">
+                  {rule.type === 'STUB' ? 'Returned as-is' : 'Merged into the payload'}
+                </p>
+                <pre className="code-block max-h-48">{JSON.stringify(rule.payload, null, 2)}</pre>
+                <div className="flex justify-end gap-3">
+                  <button onClick={() => onEdit(rule)} className="btn-link">
+                    Edit rule
+                  </button>
+                  <button onClick={() => onDelete(rule.id)} className="btn-link btn-danger">
+                    Delete
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-          <code className="break-all font-mono text-[11px] text-mute">{rule.urlPattern}</code>
-          {(rule.delayMs || rule.fault || rule.ops?.length) && (
-            <div className="flex flex-wrap gap-1">
-              {rule.delayMs ? <Chip>{rule.delayMs} ms</Chip> : null}
-              {rule.fault && (
-                <Chip>{rule.fault.kind === 'status' ? `fails ${rule.fault.status}` : rule.fault.kind}</Chip>
-              )}
-              {rule.ops?.length ? (
-                <Chip>{rule.ops.length === 1 ? '1 edit' : `${rule.ops.length} edits`}</Chip>
-              ) : null}
-            </div>
-          )}
-          <pre className="code-block max-h-24">{JSON.stringify(rule.payload, null, 2)}</pre>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

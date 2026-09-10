@@ -10,10 +10,16 @@ const onLoadBody = fn();
 const meta = {
   title: 'Panel/ExchangeDetail',
   component: ExchangeDetail,
-  args: { exchange: exchanges[1], bodies: bodies.items, onLoadBody, onCreateRule: fn() },
+  args: {
+    exchange: exchanges[1],
+    bodies: bodies.items,
+    onLoadBody,
+    onCreateRule: fn(),
+    onClose: fn(),
+  },
   decorators: [
     (Story) => (
-      <div className="panel-card overflow-hidden">
+      <div className="card overflow-hidden">
         <Story />
       </div>
     ),

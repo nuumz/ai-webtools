@@ -188,7 +188,10 @@ matching working. Relative request URLs are resolved against the page URL before
 
 A **profile** is a named set of fields that knows how to find each input and how to
 produce its value. *Fill form* writes them all in one go — across iframes and open shadow
-roots — and reports anything it could not find instead of failing silently.
+roots — and reports anything it could not find instead of failing silently. Iframes include
+the awkward ones: cross-origin, added after load, and `srcdoc`/`about:blank` children, which
+the content scripts reach through `match_about_blank` + `match_origin_as_fallback` (the
+reason the extension needs Chrome/Edge 119+).
 
 **Values** come in four flavours:
 
