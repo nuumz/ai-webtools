@@ -32,27 +32,32 @@ export default function RuleList({ rules, onToggle, onDelete, onEdit }: Props) {
     <div className="card overflow-hidden">
       {rules.map((rule, index) => {
         const open = openId === rule.id;
+        // Timing and edits are settings; only a fault changes what the page gets.
         const notes = [
           rule.delayMs ? `${rule.delayMs} ms` : undefined,
           rule.jitterMs ? `±${rule.jitterMs} ms` : undefined,
-          rule.fault
-            ? rule.fault.kind === 'status'
-              ? `fails ${rule.fault.status}`
-              : rule.fault.kind
-            : undefined,
           rule.ops?.length ? `${rule.ops.length} edit${rule.ops.length > 1 ? 's' : ''}` : undefined,
         ].filter(Boolean) as string[];
+        const fault = rule.fault
+          ? rule.fault.kind === 'status'
+            ? `fails ${rule.fault.status}`
+            : rule.fault.kind
+          : undefined;
 
         return (
           <div key={rule.id} className={index > 0 ? 'border-t border-line' : undefined}>
-            <div className={`flex items-center gap-2 px-2 py-1.5 ${rule.isActive ? '' : 'opacity-55'}`}>
+            <div
+              className={`flex items-center gap-2 px-2 py-1.5 ${rule.isActive ? '' : 'opacity-55'}`}
+            >
               <input
                 type="checkbox"
                 checked={rule.isActive}
                 onChange={() => onToggle(rule.id)}
                 title={rule.isActive ? 'Active — click to pause' : 'Paused — click to activate'}
               />
-              <span className={`chip ${rule.type === 'STUB' ? 'chip-accent' : ''}`}>
+              <span
+                className={`chip w-[4.75rem] justify-center ${rule.type === 'STUB' ? 'chip-accent' : ''}`}
+              >
                 {TYPE_LABEL[rule.type]}
                 {rule.type === 'STUB' && rule.status ? ` ${rule.status}` : ''}
               </span>
@@ -65,10 +70,11 @@ export default function RuleList({ rules, onToggle, onDelete, onEdit }: Props) {
                 {rule.urlPattern}
               </button>
               {notes.map((note) => (
-                <span key={note} className="chip chip-warn">
+                <span key={note} className="chip">
                   {note}
                 </span>
               ))}
+              {fault && <span className="chip chip-warn">{fault}</span>}
               <button
                 onClick={() => setOpenId(open ? null : rule.id)}
                 className="btn btn-sm btn-icon btn-ghost"

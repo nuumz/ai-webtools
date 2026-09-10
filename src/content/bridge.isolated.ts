@@ -48,6 +48,21 @@ const readArmedFlag = (): boolean => {
  * is async, and dropping in-flight rows until it lands is how pending never paints.
  * Capture only starts if this tab opened the panel and Record is on for it.
  */
+/**
+ * The worker re-injects this file into a tab whose scripts never ran (a page
+ * opened before the extension, or orphaned by a reload). Injecting twice must
+ * not double every capture, so the second copy stands down.
+ */
+const INSTALL_FLAG = '__DEV_TOOL_BRIDGE_INSTALLED__';
+const bridgeScope = globalThis as unknown as Record<string, unknown>;
+if (bridgeScope[INSTALL_FLAG]) {
+  // Already bridging this frame.
+} else {
+  bridgeScope[INSTALL_FLAG] = true;
+  install();
+}
+
+function install(): void {
 let settings: Settings = {
   ...normalizeSettings(undefined),
   captureEnabled: false,
@@ -328,3 +343,5 @@ chrome.storage.onChanged.addListener((changes, area) => {
   );
   if (touched) schedulePush();
 });
+
+}

@@ -69,7 +69,9 @@ export default function ProfilesCard({
 
   const updateSelector = (field: ProfileField, index: number, patch: Partial<FieldSelector>) => {
     updateField(field.id, {
-      selectors: field.selectors.map((selector, i) => (i === index ? { ...selector, ...patch } : selector)),
+      selectors: field.selectors.map((selector, i) =>
+        i === index ? { ...selector, ...patch } : selector,
+      ),
     });
   };
 
@@ -95,7 +97,11 @@ export default function ProfilesCard({
         </button>
         {active && (
           <>
-            <button onClick={onDuplicate} className="btn btn-sm btn-ghost" title="Duplicate this profile">
+            <button
+              onClick={onDuplicate}
+              className="btn btn-sm btn-ghost"
+              title="Duplicate this profile"
+            >
               Copy
             </button>
             <button
@@ -165,7 +171,7 @@ export default function ProfilesCard({
                           title="Include when filling"
                         />
                         <input
-                          className="field field-mono field-sm w-20 shrink-0"
+                          className="field field-mono field-sm w-24 shrink-0"
                           value={field.key}
                           onChange={(e) => updateField(field.id, { key: e.target.value })}
                           placeholder="key"
@@ -243,7 +249,9 @@ export default function ProfilesCard({
                               <input
                                 className="field field-mono field-sm min-w-0 flex-1"
                                 value={selector.value}
-                                onChange={(e) => updateSelector(field, index, { value: e.target.value })}
+                                onChange={(e) =>
+                                  updateSelector(field, index, { value: e.target.value })
+                                }
                                 placeholder={selector.strategy === 'css' ? '#email' : 'value'}
                                 aria-label="Selector value"
                               />
@@ -285,7 +293,10 @@ export default function ProfilesCard({
                                 value={field.after?.waitMs ?? ''}
                                 onChange={(e) =>
                                   updateField(field.id, {
-                                    after: { ...field.after, waitMs: Number(e.target.value) || undefined },
+                                    after: {
+                                      ...field.after,
+                                      waitMs: Number(e.target.value) || undefined,
+                                    },
                                   })
                                 }
                               />
@@ -344,7 +355,11 @@ export default function ProfilesCard({
                 <IconTarget />
                 Pick from page
               </button>
-              <button className="btn btn-sm btn-ghost" onClick={onRecord} title="Read the form as filled">
+              <button
+                className="btn btn-sm btn-ghost"
+                onClick={onRecord}
+                title="Read the form as filled"
+              >
                 Read the page
               </button>
             </div>

@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 /*
  * Instrument panel for a devtool that lives beside a page all day.
@@ -31,8 +31,9 @@
 }
 
 @theme {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'Helvetica Neue', sans-serif;
+  --font-mono:
+    ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace;
 
   /* Three steps, applied by purpose: control / surface / floating. */
   --radius-sm: 3px;
@@ -135,7 +136,7 @@
     outline-offset: 1px;
   }
 
-  input[type="checkbox"] {
+  input[type='checkbox'] {
     accent-color: var(--accent);
     width: 13px;
     height: 13px;
@@ -456,6 +457,15 @@
     text-transform: uppercase;
   }
 
+  /* The sentence under a control that explains it — never the control's label. */
+  .note {
+    margin: 0;
+    max-width: 62ch;
+    color: var(--faint);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
   .empty {
     margin: 0;
     padding: 28px 16px;
@@ -511,7 +521,7 @@
     color: var(--mute);
   }
 
-  .seg-item[aria-selected="true"] {
+  .seg-item[aria-selected='true'] {
     background: var(--surface);
     color: var(--ink);
     box-shadow: 0 1px 2px oklch(0% 0 0 / 0.08);
@@ -535,7 +545,7 @@
     background: var(--raised);
   }
 
-  .log-row[aria-selected="true"] {
+  .log-row[aria-selected='true'] {
     border-left-color: var(--accent);
     background: var(--accent-soft);
   }
@@ -558,7 +568,7 @@
   }
 
   .pane-grip::after {
-    content: "";
+    content: '';
     display: block;
     width: 28px;
     height: 3px;

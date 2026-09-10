@@ -116,6 +116,26 @@ export function armOpenedTab(tabId: number): void {
   const first = !isArmed(tabId);
   setTabArmed(tabId, true);
   if (first) setTabRecording(tabId, true);
+  void reviveTab(tabId);
+}
+
+/**
+ * A tab that was open before the extension — or whose scripts were orphaned when
+ * it was reloaded — runs no content scripts, and only a page reload brings them
+ * back. Inject them instead, so opening the panel is enough to start seeing
+ * traffic. Both scripts stand down if they are already installed in a frame.
+ */
+async function reviveTab(tabId: number): Promise<void> {
+  if ((pagePorts.get(tabId)?.size ?? 0) > 0) return;
+  const inject = (files: string[], world: chrome.scripting.ExecutionWorld) =>
+    chrome.scripting
+      .executeScript({ target: { tabId, allFrames: true }, files, world })
+      .catch(() => undefined);
+
+  // MAIN first, matching the manifest order: the interceptor asks for config on
+  // boot, and the bridge must be the one that answers.
+  await inject(['interceptor.main.js'], 'MAIN');
+  await inject(['bridge.isolated.js'], 'ISOLATED');
 }
 
 /**
