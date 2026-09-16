@@ -7,7 +7,13 @@
  * into literal values, and from then on the case is exactly as stable — and as
  * editable — as one saved from the screen.
  */
-import { newCase, type FormCase, type FormProfile, type ProfileField } from './form';
+import {
+  newCase,
+  type CaseSource,
+  type FormCase,
+  type FormProfile,
+  type ProfileField,
+} from './form';
 
 export interface PayloadLeaf {
   /** Dotted path, with array indices as segments: `customer.names.0.first`. */
@@ -92,12 +98,28 @@ export function matchPayload(fields: ProfileField[], leaves: PayloadLeaf[]): Pay
   };
 }
 
-/** The whole flow: a captured body plus a profile becomes a named case. */
+/**
+ * The whole flow: a captured body plus a profile becomes a named case.
+ *
+ * `from` and the matched paths are kept on the case rather than shown once and
+ * discarded — which is what the save dialog used to do, leaving the case's own
+ * name as the only trace of the response behind it.
+ */
 export function caseFromPayload(
   profile: FormProfile,
   body: unknown,
   name: string,
+  from?: CaseSource,
 ): { formCase: FormCase; match: PayloadMatch } {
   const match = matchPayload(profile.fields, flattenPayload(body));
-  return { formCase: { ...newCase(profile.id, name), values: match.values }, match };
+  const paths = Object.fromEntries(match.matched.map((entry) => [entry.key, entry.path]));
+  return {
+    formCase: {
+      ...newCase(profile.id, name),
+      values: match.values,
+      ...(from ? { from } : {}),
+      ...(match.matched.length > 0 ? { paths } : {}),
+    },
+    match,
+  };
 }

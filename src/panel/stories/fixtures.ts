@@ -134,6 +134,24 @@ export const formCases: FormCase[] = [
   { id: 'cs_thai', profileId: 'pf_signup', name: 'Thai customer', values: { country: 'Thailand', qty: '3' } },
   // `city` is deliberately blank — a case that drops it cannot put the form back as found.
   { id: 'cs_bulk', profileId: 'pf_signup', name: 'Bulk order — 250', values: { qty: '250', city: '' } },
+  // Lifted straight out of a recorded response, and remembers which one.
+  {
+    id: 'cs_api',
+    profileId: 'pf_signup',
+    name: 'GET /api/customer',
+    values: { email: 'kanya@example.co.th', country: 'Thailand', qty: '2' },
+    from: {
+      exchangeId: 'ex4',
+      method: 'GET',
+      url: `${ORIGIN}/api/customer/4821`,
+      at: T0 + 2400,
+    },
+    paths: {
+      email: 'customer.contact.email',
+      country: 'customer.address.country',
+      qty: 'order.lines.0.quantity',
+    },
+  },
 ];
 
 /** Two signatures scored against a page showing the second one. */

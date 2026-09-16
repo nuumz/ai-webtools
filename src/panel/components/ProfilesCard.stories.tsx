@@ -59,6 +59,15 @@ export const CaseWithBlank: Story = {
   args: { activeCaseId: formCases[1].id },
 };
 
+/**
+ * A case lifted out of a recorded response: each value says which path it came
+ * from, and the header says which call. The name alone could not — it is a
+ * suggestion the user is free to overwrite.
+ */
+export const CaseFromAnApi: Story = {
+  args: { activeCaseId: formCases[2].id },
+};
+
 /** The tab is on a different step, so the panel names the screen that is showing. */
 export const AnotherScreenShowing: Story = {
   args: { screen: screenElsewhere },

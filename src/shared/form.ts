@@ -103,6 +103,27 @@ export interface FormCase {
   name: string;
   /** Field key → the value to type. A key that is absent falls back to the field's own source. */
   values: Record<string, string>;
+  /**
+   * The response these values were taken from, so a case can still answer
+   * "where did this come from?" months later. The name alone cannot: it is a
+   * suggestion the user is invited to overwrite.
+   */
+  from?: CaseSource;
+  /**
+   * Field key → the path it was read from in that response, e.g.
+   * `customer.names.0.first`. The matcher already works this out; it used to be
+   * shown once in the save dialog and then thrown away.
+   */
+  paths?: Record<string, string>;
+}
+
+/** Which exchange a case was built from. */
+export interface CaseSource {
+  exchangeId: string;
+  method: string;
+  url: string;
+  /** When the response was captured, not when the case was saved. */
+  at: number;
 }
 
 export function newCase(profileId: string, name: string): FormCase {

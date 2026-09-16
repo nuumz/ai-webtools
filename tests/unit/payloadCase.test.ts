@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { flattenPayload, matchPayload } from '../../src/shared/payloadCase';
-import { recordedToField } from '../../src/shared/form';
-import type { ProfileField } from '../../src/shared/form';
+import { caseFromPayload, flattenPayload, matchPayload } from '../../src/shared/payloadCase';
+import { newProfile, recordedToField } from '../../src/shared/form';
+import type { FormProfile, ProfileField } from '../../src/shared/form';
 
 const field = (key: string, label?: string): ProfileField => ({
   id: `fd_${key}`,
@@ -87,5 +87,44 @@ describe('recordedToField', () => {
       [],
     );
     expect(built.key).toBe('emailAddress');
+  });
+});
+
+describe('caseFromPayload', () => {
+  const profile = (): FormProfile => ({
+    ...newProfile('customer'),
+    fields: [field('first'), field('last'), field('nickname')],
+  });
+
+  const body = { customer: { names: [{ first: 'กุลชรี', last: 'ส.' }] } };
+  const from = {
+    exchangeId: 'ex_1',
+    method: 'GET',
+    url: 'https://api.internal/customer/42',
+    at: 1_700_000_000_000,
+  };
+
+  it('remembers the path each value was read from', () => {
+    const { formCase } = caseFromPayload(profile(), body, 'GET /customer', from);
+    expect(formCase.paths).toEqual({
+      first: 'customer.names.0.first',
+      last: 'customer.names.0.last',
+    });
+  });
+
+  it('remembers the response behind the values', () => {
+    const { formCase } = caseFromPayload(profile(), body, 'GET /customer', from);
+    expect(formCase.from).toEqual(from);
+  });
+
+  it('says nothing about a field the payload did not fill', () => {
+    const { formCase } = caseFromPayload(profile(), body, 'GET /customer', from);
+    expect(formCase.paths?.nickname).toBeUndefined();
+  });
+
+  it('is still a plain case when it came from nowhere in particular', () => {
+    const { formCase } = caseFromPayload(profile(), {}, 'hand-written');
+    expect(formCase.from).toBeUndefined();
+    expect(formCase.paths).toBeUndefined();
   });
 });
