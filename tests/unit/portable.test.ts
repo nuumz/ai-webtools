@@ -51,6 +51,22 @@ describe('migrateState', () => {
     expect(migrateState({ formCases }).formCases).toEqual(formCases);
   });
 
+  it('carries where a case came from, and survives one that has no source', () => {
+    const formCases = [
+      {
+        id: 'cs_1',
+        profileId: 'pf_1',
+        name: 'GET /api/customer',
+        values: { first: 'กุลชรี' },
+        from: { exchangeId: 'ex_1', method: 'GET', url: 'https://api/x', at: 1 },
+        paths: { first: 'customer.names.0.first' },
+      },
+      // Written by hand, or by a build from before provenance existed.
+      { id: 'cs_2', profileId: 'pf_1', name: 'blank', values: {} },
+    ];
+    expect(migrateState({ formCases }).formCases).toEqual(formCases);
+  });
+
   it('normalizes settings from an older export', () => {
     const state = migrateState({ settings: { enabled: false } });
     expect(state.settings.enabled).toBe(false);

@@ -6,7 +6,12 @@ import type { HttpMethod } from '../../shared/types';
 import type { RuleDraft } from './RuleForm';
 import type { ExchangeBodies } from '../hooks/useNetworkLog';
 import { caseFromPayload } from '../../shared/payloadCase';
-import { uniqueCaseName, type FormCase, type FormProfile } from '../../shared/form';
+import {
+  uniqueCaseName,
+  type CaseSource,
+  type FormCase,
+  type FormProfile,
+} from '../../shared/form';
 
 interface Props {
   exchange: ExchangeMeta;
@@ -136,6 +141,12 @@ export default function ExchangeDetail({
             payload={responsePayload}
             loading={bodies === undefined}
             defaultName={`${exchange.method} ${exchange.pathname}`}
+            from={{
+              exchangeId: exchange.id,
+              method: exchange.method,
+              url: exchange.url,
+              at: exchange.startedAt,
+            }}
             onSave={onSaveCase}
           />
         )}
@@ -201,6 +212,7 @@ function PayloadCase({
   payload,
   loading,
   defaultName,
+  from,
   onSave,
 }: {
   profiles: FormProfile[];
@@ -208,6 +220,8 @@ function PayloadCase({
   payload: unknown;
   loading: boolean;
   defaultName: string;
+  /** The response behind these values, kept on the case rather than shown once. */
+  from: CaseSource;
   onSave: (formCase: FormCase) => void;
 }) {
   const [profileId, setProfileId] = useState(profiles[0]?.id);
@@ -238,7 +252,7 @@ function PayloadCase({
     );
   }
 
-  const { formCase, match } = caseFromPayload(profile, payload, name);
+  const { formCase, match } = caseFromPayload(profile, payload, name, from);
   const total = profile.fields.length;
   // Fewer than half is the shape of a wrong pick, not of a sparse response.
   const thin = total > 0 && match.matched.length * 2 < total;

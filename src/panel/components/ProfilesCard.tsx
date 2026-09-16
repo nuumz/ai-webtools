@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { IconChevron, IconClose, IconPlus, IconTarget } from './icons';
+import { formatClock } from '../format';
 import {
   newField,
   type FieldReadiness,
@@ -11,6 +12,16 @@ import {
   type ScreenSignature,
 } from '../../shared/form';
 import type { ScreenOutcome } from '../../inject/run';
+
+/** The path alone, so a long URL still fits a 400px panel. */
+function pathOf(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return url;
+  }
+}
 
 const STRATEGIES: FieldStrategy[] = ['testid', 'id', 'name', 'label', 'aria', 'placeholder', 'css'];
 
@@ -197,6 +208,24 @@ export default function ProfilesCard({
         </div>
       )}
 
+      {/*
+        Which response these values were lifted from. The case name is only a
+        suggestion the user can overwrite, so it cannot be the answer to "what
+        is this bound to?" — this can.
+      */}
+      {active && activeCase?.from && (
+        <p
+          className="m-0 flex items-center gap-1.5 border-b border-line bg-inset px-2 py-1 font-mono text-[10.5px] text-faint"
+          title={`${activeCase.from.method} ${activeCase.from.url}`}
+        >
+          <span className="chip shrink-0">from</span>
+          <span className="min-w-0 flex-1 truncate">
+            {activeCase.from.method} {pathOf(activeCase.from.url)}
+          </span>
+          <span className="shrink-0 tabular-nums">{formatClock(activeCase.from.at)}</span>
+        </p>
+      )}
+
       {!active ? (
         <p className="empty">
           Create a profile to stop retyping the same form.
@@ -371,6 +400,16 @@ export default function ProfilesCard({
                             → {preview[field.key]}
                           </p>
                         )}
+
+                      {/* Where this value came from, when it was lifted out of a response. */}
+                      {activeCase?.paths?.[field.key] && (
+                        <p
+                          className="m-0 truncate px-2 pb-1.5 pl-[2.1rem] font-mono text-[10.5px] text-faint"
+                          title={`Read from ${activeCase.paths[field.key]}`}
+                        >
+                          ← {activeCase.paths[field.key]}
+                        </p>
+                      )}
 
                       {openId === field.id && (
                         <div className="space-y-2 border-t border-line bg-inset p-2">

@@ -105,6 +105,11 @@ export interface ExchangeMeta {
   contentType: string;
   reqBytes: number;
   resBytes: number;
+  /**
+   * Which frame made the request. Stamped by the service worker from
+   * `port.sender.frameId`; the page cannot know its own.
+   */
+  frameId?: number;
 }
 
 export function newExchangeId(): string {

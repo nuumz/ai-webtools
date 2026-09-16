@@ -10,7 +10,13 @@ import { pullFromSync, pushToSync } from '../shared/sync';
 import { resolveProfile } from '../shared/resolveProfile';
 import { formAgent } from '../inject/formAgent';
 import { DEFAULT_FORM_FILL_FIELDS, STORAGE_KEYS, type MutationRule } from '../shared/types';
-import { armOpenedTab, initRouter, resumeInspect, workingFrameFor } from './router';
+import {
+  armOpenedTab,
+  initRouter,
+  resumeInspect,
+  workingFrameFor,
+  workingFrameUrlFor,
+} from './router';
 import { armedTabIds, isArmed, recordingTabIds } from './armedTabs';
 import { restoreFromSession } from './logStore';
 
@@ -147,7 +153,10 @@ async function fillActiveForm(tabId: number, url: string | undefined): Promise<v
       loadCounters(),
     ]);
 
-    const profile = pickProfileForUrl(profiles, url, settings.lastProfileByOrigin);
+    // Match the profile against the frame the panel works in, not the tab: the
+    // shell's URL says nothing about the app inside it.
+    const at = workingFrameUrlFor(tabId) ?? url;
+    const profile = pickProfileForUrl(profiles, at, settings.lastProfileByOrigin);
     if (!profile) return flashBadge('?');
 
     const resolved = resolveProfile(profile, { counters });

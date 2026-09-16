@@ -268,6 +268,17 @@ export function workingFrameFor(tabId: number): number | undefined {
   return workingFrames.get(tabId);
 }
 
+/**
+ * The address the panel is really working at. An app inside a cross-origin
+ * iframe has nothing to do with the tab's URL, so choosing a profile by the
+ * tab would look at the shell instead of the app.
+ */
+export function workingFrameUrlFor(tabId: number): string | undefined {
+  const frameId = workingFrames.get(tabId);
+  if (frameId === undefined) return undefined;
+  return pagePorts.get(tabId)?.get(frameId)?.url || undefined;
+}
+
 function cancelDisarm(tabId: number): void {
   const timer = disarmTimers.get(tabId);
   if (timer === undefined) return;
@@ -385,6 +396,15 @@ function handlePageMessage(tabId: number, frameId: number, message: PageToBg): v
       }
       break;
     }
+    case 'page/route': {
+      // Same document, new screen. Only the frame's address changed, so the log
+      // and the arming state stay exactly as they are.
+      const entry = pagePorts.get(tabId)?.get(frameId);
+      if (!entry || entry.url === message.url) break;
+      entry.url = message.url;
+      sendFrames(tabId);
+      break;
+    }
     case 'page/frame': {
       const entry = pagePorts.get(tabId)?.get(frameId);
       if (!entry) break;
@@ -397,7 +417,7 @@ function handlePageMessage(tabId: number, frameId: number, message: PageToBg): v
     }
     case 'capture/exchange': {
       if (!isArmed(tabId) || !isRecording(tabId)) break;
-      const entries = addExchanges(tabId, message.exchanges);
+      const entries = addExchanges(tabId, frameId, message.exchanges);
       if (entries.length === 0) break;
       const { dropped } = getEntries(tabId);
       broadcast(tabId, (panelPort) =>

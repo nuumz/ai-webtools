@@ -25,6 +25,8 @@ import {
 import type { CapturedExchange } from '../shared/capture';
 
 const SYNC_DEBOUNCE_MS = 50;
+/** A router can write several history entries in one turn; only the last is a screen. */
+const ROUTE_DEBOUNCE_MS = 120;
 /** Ceiling on records forwarded per second; the excess is counted, not queued. */
 const RATE_LIMIT_PER_SEC = 50;
 
@@ -435,5 +437,38 @@ chrome.storage.onChanged.addListener((changes, area) => {
   );
   if (touched) schedulePush();
 });
+
+/*
+ * 4. …and when this frame moves to another screen without loading a document.
+ *
+ * A hard navigation re-runs this whole script and says hello with the new URL.
+ * An SPA route change says nothing at all — same document, same listeners — so
+ * the panel went on showing the address the frame had when it loaded. That is
+ * the frame the user is working in, so its address has to keep up.
+ */
+let lastRoute = location.href;
+let routeTimer: ReturnType<typeof setTimeout> | undefined;
+
+const reportRoute = (): void => {
+  if (routeTimer !== undefined) clearTimeout(routeTimer);
+  // A router often writes several entries in one turn; only the last is a screen.
+  routeTimer = setTimeout(() => {
+    routeTimer = undefined;
+    if (location.href === lastRoute) return;
+    lastRoute = location.href;
+    post({ kind: 'page/route', url: location.href });
+  }, ROUTE_DEBOUNCE_MS);
+};
+
+for (const name of ['pushState', 'replaceState'] as const) {
+  const original = history[name];
+  history[name] = function patched(this: History, ...args: Parameters<History['pushState']>) {
+    const result = original.apply(this, args);
+    reportRoute();
+    return result;
+  };
+}
+window.addEventListener('popstate', reportRoute);
+window.addEventListener('hashchange', reportRoute);
 
 }

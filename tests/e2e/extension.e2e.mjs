@@ -33,6 +33,25 @@ export default async function run() {
     return 0;
   }
 
+  /*
+   * Wait for the extension to lay down its own first-run seed before writing
+   * ours over it. That seed replaces `mutationRules` whenever it does not
+   * already find an array there, and its read lands about a millisecond from
+   * our write — so seeding first is a coin flip. Losing it wipes the rules
+   * while the stories live on, because they are no part of that seed, and
+   * every plain-rule check below then fails as though the bridge had never
+   * pushed a config at all.
+   */
+  await worker.evaluate(async () => {
+    const deadline = Date.now() + 10000;
+    for (;;) {
+      const stored = await chrome.storage.local.get('mutationRules');
+      if (Array.isArray(stored.mutationRules)) return;
+      if (Date.now() > deadline) throw new Error('the extension never seeded its own storage');
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  });
+
   // Seed through storage, exactly as the panel does.
   await worker.evaluate(
     ([origin]) =>
@@ -347,6 +366,53 @@ export default async function run() {
     const inShell = written.find((row) => row?.url.includes('/demo/framed') && !row.url.includes('framed-app'));
     t.check(`the chosen frame is filled (${what})`, inApp?.email, 'only-the-app@dev.local');
     t.check(`and the shell around it is left alone (${what})`, inShell?.email, '');
+
+    // ----------------------------------------- following the frame's navigation
+    /*
+     * The frame id belongs to the frame, not the document, so a choice made once
+     * has to keep naming the same iframe after it moves. Both kinds of move
+     * matter: a route change inside the app (no document load, nothing used to
+     * be emitted at all) and a real navigation.
+     */
+    const frameIdBefore = appFrame?.frameId;
+
+    const appHandle = framed.frames().find((frame) => frame.url().includes('/demo/framed-app'));
+    await appHandle?.click('#next');
+    await framed.waitForTimeout(400);
+
+    const afterRoute = await worker.evaluate(async ([id]) => {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: id, allFrames: true },
+        func: () => location.href,
+      });
+      return results.map((entry) => ({ frameId: entry.frameId, url: entry.result }));
+    }, [framedTabId]);
+    const routed = afterRoute.find((frame) => frame.frameId === frameIdBefore);
+    t.assert(
+      `a route change keeps the same frame id (${what})`,
+      routed?.url.includes('step=2'),
+      JSON.stringify(afterRoute),
+    );
+
+    // And a real navigation of that same frame.
+    await appHandle?.evaluate(() => {
+      location.href = '/demo/framed-app?loaded=1';
+    });
+    await framed.waitForTimeout(700);
+
+    const afterLoad = await worker.evaluate(async ([id]) => {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: id, allFrames: true },
+        func: () => location.href,
+      });
+      return results.map((entry) => ({ frameId: entry.frameId, url: entry.result }));
+    }, [framedTabId]);
+    const reloaded = afterLoad.find((frame) => frame.frameId === frameIdBefore);
+    t.assert(
+      `and so does a real navigation (${what})`,
+      reloaded?.url.includes('loaded=1'),
+      JSON.stringify(afterLoad),
+    );
 
     await framed.close();
   }

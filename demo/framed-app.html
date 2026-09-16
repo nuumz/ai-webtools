@@ -10,12 +10,21 @@
     </style>
   </head>
   <body>
-    <h1>Application</h1>
+    <h1 id="screen">Application</h1>
     <form>
       <label for="email">Email</label>
       <input id="email" name="email" data-testid="email" placeholder="the app's field" />
       <label for="reference">Reference</label>
       <input id="reference" name="reference" />
     </form>
+    <button id="next" type="button">Next screen</button>
+    <script>
+      // A route change with no document load — the case that used to leave the
+      // panel showing the address the frame had when it first loaded.
+      document.getElementById('next').addEventListener('click', () => {
+        history.pushState({}, '', '/demo/framed-app?step=2');
+        document.getElementById('screen').textContent = 'Step two';
+      });
+    </script>
   </body>
 </html>
