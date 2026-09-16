@@ -14,10 +14,116 @@ import { readFileSync } from 'node:fs';
 
 const PAGE = '<!doctype html><meta charset=utf-8><title>t</title><body>ok</body>';
 
+/*
+ * A suite closes its own browser and server on the way out. When one throws
+ * part way through, nothing does — and an open Chromium connection or a
+ * listening socket keeps node alive, so letting the runner carry on to the
+ * next suite would hang the run rather than end it.
+ *
+ * Every such resource is handed out from here, so this is also the one place
+ * that can dispose of whatever a failed suite left behind.
+ */
+const openResources = new Set();
+const checkers = [];
+
+/** Closes anything the suites opened. Safe to call after a clean suite too: closing twice is a no-op. */
+export async function closeOpenResources() {
+  for (const close of openResources) {
+    try {
+      await close();
+    } catch {
+      // Already closed on the happy path, which is the common case.
+    }
+  }
+  openResources.clear();
+}
+
+/**
+ * Failures recorded by every checker so far. The runner reads this instead of
+ * a suite's return value, so the checks a suite did run still count when it
+ * throws before it can return them.
+ */
+function recordedFailures() {
+  return checkers.reduce((total, checker) => total + checker.failures, 0);
+}
+
+/*
+ * Runs the named suites and returns the total number of failed checks.
+ *
+ * A suite that throws — a Playwright timeout, most often — used to take the
+ * process with it, so one broken wait hid the state of every later suite and
+ * the log ended in a stack trace instead of a tally. Report it as the failure
+ * it is and keep going; the run still exits non-zero.
+ */
+export async function runSuites(entries) {
+  let thrown = 0;
+  /*
+   * A suite abandons its in-flight page calls when it throws, and every one of
+   * them rejects with "Target closed" the moment we tear the browser down.
+   * Node treats an unhandled rejection as fatal, so those would kill the run we
+   * are keeping alive — while the failure that caused them is already reported.
+   * Outside that window a rejection nobody handled is a real defect, so it
+   * counts.
+   */
+  let unravelling = false;
+  const onUnhandled = (reason) => {
+    const detail = reason?.message ?? reason;
+    if (unravelling) {
+      console.error(`      (abandoned by the failure) ${detail}`);
+      return;
+    }
+    thrown += 1;
+    console.error(`FAIL [runner] nothing handled a rejected promise → ${detail}`);
+  };
+  process.on('unhandledRejection', onUnhandled);
+
+  try {
+    for (const [name, suite] of entries) {
+      try {
+        await suite();
+      } catch (error) {
+        thrown += 1;
+        unravelling = true;
+        console.error(`FAIL [${name}] the suite threw before it finished → ${error?.message ?? error}`);
+        const where = String(error?.stack ?? '')
+          .split('\n')
+          .find((line) => line.includes('/tests/'));
+        if (where) console.error(`      ${where.trim()}`);
+      } finally {
+        // The suite closes these itself when it gets that far; this catches
+        // what a throw skipped, so no open handle can keep the run alive.
+        await closeOpenResources();
+        // Give the calls it abandoned a turn to settle against the closed
+        // browser before rejections count against the next suite.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        unravelling = false;
+      }
+    }
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+  return recordedFailures() + thrown;
+}
+
 export async function loadChromium() {
   try {
     const { chromium } = await import('playwright');
-    return chromium;
+    // Suites call `chromium.launch()` directly, so hand back a stand-in that
+    // registers what it opens. Reflect/bind keeps every call on the real
+    // BrowserType, which owns private state a copied object would not have.
+    return new Proxy(chromium, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target);
+        if (typeof value !== 'function') return value;
+        const method = value.bind(target);
+        if (property !== 'launch' && property !== 'launchPersistentContext') return method;
+        return async (...args) => {
+          const handle = await method(...args);
+          openResources.add(() => handle.close());
+          return handle;
+        };
+      },
+    });
   } catch {
     console.error('Playwright is not installed. Run: npm i -D playwright && npx playwright install chromium');
     process.exit(1);
@@ -113,6 +219,7 @@ export async function startServer() {
   });
 
   await new Promise((resolve) => server.listen(0, resolve));
+  openResources.add(() => server.close());
   return {
     base: `http://localhost:${server.address().port}`,
     state,
@@ -173,7 +280,7 @@ export async function openFormPage(browser, base) {
 
 export function createChecker(suite) {
   let failures = 0;
-  return {
+  const checker = {
     check(name, got, want) {
       const ok = JSON.stringify(got) === JSON.stringify(want);
       if (!ok) failures += 1;
@@ -188,4 +295,6 @@ export function createChecker(suite) {
       return failures;
     },
   };
+  checkers.push(checker);
+  return checker;
 }
