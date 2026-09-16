@@ -120,8 +120,12 @@ export default async function run() {
 
   // Poll on an interval, not rAF: a child frame's animation frames can be
   // throttled, which made this wait hang instead of resolving.
+  //
+  // The flag is the live picker's own cancel handle, not a boolean — matching
+  // on its type keeps this tied to that contract, so swapping the handle back
+  // out for a bare `true` fails here instead of passing by accident.
   const waitForPicker = (target) =>
-    target.waitForFunction(() => window.__DEV_TOOL_PICKING__ === true, undefined, {
+    target.waitForFunction(() => typeof window.__DEV_TOOL_PICKING__ === 'function', undefined, {
       polling: 50,
       timeout: 5000,
     });
