@@ -33,6 +33,25 @@ export default async function run() {
     return 0;
   }
 
+  /*
+   * Wait for the extension to lay down its own first-run seed before writing
+   * ours over it. That seed replaces `mutationRules` whenever it does not
+   * already find an array there, and its read lands about a millisecond from
+   * our write — so seeding first is a coin flip. Losing it wipes the rules
+   * while the stories live on, because they are no part of that seed, and
+   * every plain-rule check below then fails as though the bridge had never
+   * pushed a config at all.
+   */
+  await worker.evaluate(async () => {
+    const deadline = Date.now() + 10000;
+    for (;;) {
+      const stored = await chrome.storage.local.get('mutationRules');
+      if (Array.isArray(stored.mutationRules)) return;
+      if (Date.now() > deadline) throw new Error('the extension never seeded its own storage');
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  });
+
   // Seed through storage, exactly as the panel does.
   await worker.evaluate(
     ([origin]) =>
