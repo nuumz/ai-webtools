@@ -272,6 +272,85 @@ export default async function run() {
   });
   t.check('a mock too large to sync survives a pull', survivors.join(','), 'lg,sm');
 
+  // ------------------------------------------------- the working frame
+  /*
+   * The case the whole feature exists for: the app runs in an iframe, and the
+   * shell around it has a field with the same id. Filling "the page" writes
+   * both and reports success either way, so the only way to be right is to
+   * name the frame. Run it twice — a portal's app frame is very often on
+   * another host, and that is the case the top frame cannot reach into.
+   */
+  for (const [what, query] of [
+    ['same-origin', ''],
+    ['cross-origin', '?cross=1'],
+  ]) {
+    const framed = await context.newPage();
+    await framed.goto(`${server.base}/demo/framed${query}`);
+    await framed.waitForTimeout(500);
+    // The suite already has a tab on this host, so match the fixture itself.
+    const framedTabId = await worker.evaluate(
+      async ([base]) => (await chrome.tabs.query({ url: `${base}/demo/framed*` }))[0]?.id,
+      [server.base],
+    );
+
+    // The worker learns every frame from `port.sender.frameId`; the app frame
+    // is the one that reports fields, which is what makes the list readable.
+    const frames = await worker.evaluate(async ([id]) => {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: id, allFrames: true },
+        func: () => ({
+          url: location.href,
+          inputs: document.querySelectorAll('input').length,
+        }),
+      });
+      return results.map((entry) => ({ frameId: entry.frameId, ...entry.result }));
+    }, [framedTabId]);
+
+    const appFrame = frames.find((frame) => frame.url.includes('/demo/framed-app'));
+    const shellFrame = frames.find((frame) => frame.url.includes('/demo/framed?') || frame.url.endsWith('/demo/framed'));
+    t.assert(`the app's frame is visible to the worker (${what})`, Boolean(appFrame), JSON.stringify(frames));
+    t.assert(`and so is the shell around it (${what})`, Boolean(shellFrame), JSON.stringify(frames));
+
+    // Targeted the way the panel targets once a working frame is chosen.
+    await worker.evaluate(
+      async ([id, frameId]) => {
+        await chrome.scripting.executeScript({
+          target: { tabId: id, frameIds: [frameId] },
+          files: ['formAgent.js'],
+        });
+        await chrome.scripting.executeScript({
+          target: { tabId: id, frameIds: [frameId] },
+          func: (command) => window.__DEV_TOOL_FORM_AGENT__(command),
+          args: [
+            {
+              kind: 'fill',
+              fields: [
+                { key: 'email', selectors: [{ strategy: 'id', value: 'email' }], value: 'only-the-app@dev.local' },
+              ],
+            },
+          ],
+        });
+      },
+      [framedTabId, appFrame?.frameId ?? 0],
+    );
+    await framed.waitForTimeout(200);
+
+    const written = await worker.evaluate(async ([id]) => {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: id, allFrames: true },
+        func: () => ({ url: location.href, email: document.querySelector('#email')?.value ?? null }),
+      });
+      return results.map((entry) => entry.result);
+    }, [framedTabId]);
+
+    const inApp = written.find((row) => row?.url.includes('/demo/framed-app'));
+    const inShell = written.find((row) => row?.url.includes('/demo/framed') && !row.url.includes('framed-app'));
+    t.check(`the chosen frame is filled (${what})`, inApp?.email, 'only-the-app@dev.local');
+    t.check(`and the shell around it is left alone (${what})`, inShell?.email, '');
+
+    await framed.close();
+  }
+
   await context.close();
   server.close();
   rmSync(profile, { recursive: true, force: true });

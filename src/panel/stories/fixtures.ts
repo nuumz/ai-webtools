@@ -12,6 +12,7 @@ import { newField, newProfile, type FormCase, type FormProfile } from '../../sha
 import type { ScreenOutcome } from '../../inject/run';
 import { newStory, type StoryMeta } from '../../shared/story';
 import type { NetworkLogState } from '../hooks/useNetworkLog';
+import type { FrameInfo } from '../../shared/frames';
 import { DEFAULT_SETTINGS, type MutationRule, type Settings } from '../../shared/types';
 
 const ORIGIN = 'https://shop.internal';
@@ -272,6 +273,13 @@ export const recordedFields = [
 export const tabUrl = `${ORIGIN}/checkout`;
 export const usageBytes = 3_612_480;
 
+/** A simulator wrapping the app in an iframe — the shape that breaks auto-fill. */
+export const frames: FrameInfo[] = [
+  { frameId: 0, url: `${ORIGIN}/simulator`, depth: 0, inputs: 0, heading: 'Device simulator' },
+  { frameId: 12, url: 'https://app.internal/checkout', depth: 1, inputs: 8, heading: 'Checkout' },
+  { frameId: 19, url: 'https://ads.example.com/banner', depth: 1, inputs: 0 },
+];
+
 /**
  * A `NetworkLogState` that behaves like the real hook without a port. The
  * handlers are created once per call and kept stable by the stories, because
@@ -288,6 +296,10 @@ export function makeLog(over: Partial<NetworkLogState> = {}): NetworkLogState {
     recording: true,
     setRecording: () => {},
     pageConnected: true,
+    frames,
+    workingFrameId: 12,
+    selectFrame: () => {},
+    refreshFrames: () => {},
     entries: exchanges,
     dropped: 0,
     bodies: { ex1: bodies.items, ex3: bodies.checkout },

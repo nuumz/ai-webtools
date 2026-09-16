@@ -72,3 +72,39 @@ describe('resolveProfile', () => {
     expect(result.fields.map((field) => field.key)).toEqual(['doubled']);
   });
 });
+
+describe('what reaches the page', () => {
+  it('carries the anchor that tells two matches of one selector apart', () => {
+    const profile: FormProfile = {
+      ...newProfile('anchored'),
+      fields: [
+        {
+          ...newField('amount'),
+          selectors: [{ strategy: 'label', value: 'Amount' }],
+          anchor: { text: 'Beneficiary' },
+          source: { kind: 'literal', value: '100' },
+        },
+      ],
+    };
+
+    const [field] = resolveProfile(profile).fields;
+    expect(field.anchor).toEqual({ text: 'Beneficiary' });
+  });
+
+  it('carries the readiness the agent waits on for late options', () => {
+    const profile: FormProfile = {
+      ...newProfile('waiting'),
+      fields: [
+        {
+          ...newField('city'),
+          selectors: [{ strategy: 'id', value: 'city' }],
+          waitFor: { optionText: 'Chiang Mai', timeoutMs: 500 },
+          source: { kind: 'literal', value: 'Chiang Mai' },
+        },
+      ],
+    };
+
+    const [field] = resolveProfile(profile).fields;
+    expect(field.waitFor).toEqual({ optionText: 'Chiang Mai', timeoutMs: 500 });
+  });
+});

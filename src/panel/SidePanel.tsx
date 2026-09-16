@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import RuleForm, { type RuleDraft } from './components/RuleForm';
 import RuleList from './components/RuleList';
 import ProfilesCard from './components/ProfilesCard';
+import FramePicker from './components/FramePicker';
 import RecordedFieldsDialog from './components/RecordedFieldsDialog';
 import SettingsCard from './components/SettingsCard';
 import TabBar, { type TabId } from './components/TabBar';
@@ -360,7 +361,7 @@ export default function SidePanel() {
         showToast(resolved.errors[0]);
         return;
       }
-      const outcome = await runFill(browserTab.id, resolved.fields);
+      const outcome = await runFill(browserTab.id, resolved.fields, log.workingFrameId);
       setCounters(resolved.counters);
       void saveCounters(resolved.counters);
       rememberProfileForTab(browserTab.url, cased.id);
@@ -389,6 +390,31 @@ export default function SidePanel() {
     }
   };
 
+  /**
+   * Choose the working frame by clicking inside it. Deliberately reaches every
+   * frame — the whole point is to learn which one the user means — and keeps
+   * only the frame, not the element.
+   */
+  const pickWorkingFrame = async () => {
+    try {
+      const browserTab = await targetTab();
+      if (browserTab?.id === undefined) return;
+      showToast('Click anything inside the frame you are working in…');
+
+      const picked = await runPick(browserTab.id);
+      if (!picked) {
+        showToast('Picking cancelled');
+        return;
+      }
+      log.selectFrame(picked.frameId);
+      log.refreshFrames();
+      showToast(picked.frameId === 0 ? 'Working in the top frame' : 'Working frame set');
+    } catch (err) {
+      console.error('[Panel] Pick frame failed:', err);
+      showToast('Pick failed — see console');
+    }
+  };
+
   const pickField = async (fieldId?: string) => {
     if (!activeProfile) return;
     try {
@@ -396,6 +422,8 @@ export default function SidePanel() {
       if (browserTab?.id === undefined) return;
       showToast('Click a field on the page…');
 
+      // Picking is the one command that must still reach every frame: the point
+      // is to find out which frame the user means.
       const picked = await runPick(browserTab.id);
       if (!picked) {
         showToast('Picking cancelled');
@@ -431,7 +459,7 @@ export default function SidePanel() {
       const browserTab = await targetTab();
       if (browserTab?.id === undefined) return;
       setIncludeSecrets(secrets);
-      const found = await runRecord(browserTab.id, secrets);
+      const found = await runRecord(browserTab.id, secrets, log.workingFrameId);
       // An empty array is truthy, so without this the dialog opened with nothing
       // in it and the button read as broken rather than as having found nothing.
       if (found.fields.length === 0) {
@@ -546,7 +574,7 @@ export default function SidePanel() {
     try {
       const browserTab = await targetTab();
       if (browserTab?.id === undefined) return;
-      setScreen(await runScreen(browserTab.id, signatures));
+      setScreen(await runScreen(browserTab.id, signatures, log.workingFrameId));
     } catch (err) {
       console.error('[Panel] Screen check failed:', err);
       setScreen(undefined);
@@ -738,31 +766,41 @@ export default function SidePanel() {
           ))}
 
         {tab === 'fill' && (
-          <ProfilesCard
-            profiles={profiles}
-            activeId={profileId}
-            cases={profileCases}
-            activeCaseId={activeCase?.id}
-            screen={screen}
-            screenBusy={screenBusy}
-            preview={previewed.values}
-            errors={previewed.errors}
-            disabled={log.tabClosed}
-            onSelect={setProfileId}
-            onSelectCase={setCaseId}
-            onCreateCase={createCase}
-            onChangeCase={updateCase}
-            onDeleteCase={deleteCase}
-            onCheckScreen={() => void checkScreen()}
-            onChangeScreen={setScreenSignature}
-            onChange={updateProfile}
-            onCreate={createProfile}
-            onDuplicate={duplicateProfile}
-            onDelete={deleteProfile}
-            onFill={() => void fillForm()}
-            onRecord={() => void recordForm()}
-            onPick={(fieldId) => void pickField(fieldId)}
-          />
+          <>
+            <FramePicker
+              frames={log.frames}
+              workingFrameId={log.workingFrameId}
+              busy={log.tabClosed}
+              onSelect={log.selectFrame}
+              onRefresh={log.refreshFrames}
+              onPick={() => void pickWorkingFrame()}
+            />
+            <ProfilesCard
+              profiles={profiles}
+              activeId={profileId}
+              cases={profileCases}
+              activeCaseId={activeCase?.id}
+              screen={screen}
+              screenBusy={screenBusy}
+              preview={previewed.values}
+              errors={previewed.errors}
+              disabled={log.tabClosed}
+              onSelect={setProfileId}
+              onSelectCase={setCaseId}
+              onCreateCase={createCase}
+              onChangeCase={updateCase}
+              onDeleteCase={deleteCase}
+              onCheckScreen={() => void checkScreen()}
+              onChangeScreen={setScreenSignature}
+              onChange={updateProfile}
+              onCreate={createProfile}
+              onDuplicate={duplicateProfile}
+              onDelete={deleteProfile}
+              onFill={() => void fillForm()}
+              onRecord={() => void recordForm()}
+              onPick={(fieldId) => void pickField(fieldId)}
+            />
+          </>
         )}
 
         {settingsOpen && (
