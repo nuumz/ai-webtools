@@ -16,6 +16,8 @@ export type PageToBg =
   | { kind: 'page/hello'; url: string; isTop: boolean; fresh: boolean }
   /** Answer to `page/describe`: what this frame looks like, for the panel's list. */
   | { kind: 'page/frame'; info: FrameDescriptor }
+  /** This frame moved to another screen without loading a document. */
+  | { kind: 'page/route'; url: string }
   | { kind: 'capture/exchange'; exchanges: CapturedExchange[] }
   | { kind: 'capture/dropped'; count: number };
 

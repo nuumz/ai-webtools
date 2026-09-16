@@ -364,7 +364,10 @@ export default function SidePanel() {
       const outcome = await runFill(browserTab.id, resolved.fields, log.workingFrameId);
       setCounters(resolved.counters);
       void saveCounters(resolved.counters);
-      rememberProfileForTab(browserTab.url, cased.id);
+      // The frame's own address, not the tab's: an app in a cross-origin iframe
+      // would otherwise be filed under the shell that hosts it, and could never
+      // match its own siteScope.
+      rememberProfileForTab(workingFrameUrl ?? browserTab.url, cased.id);
 
       const unfilled =
         outcome.misses.length + outcome.skipped.length + outcome.rejected.length;
@@ -374,6 +377,13 @@ export default function SidePanel() {
       showToast('Fill failed — see console');
     }
   };
+
+  /**
+   * Where the panel is really working: the chosen frame's URL, falling back to
+   * the tab's when no frame was picked.
+   */
+  const workingFrameUrl =
+    log.frames.find((frame) => frame.frameId === log.workingFrameId)?.url ?? undefined;
 
   /** Lets the keyboard shortcut fill with whatever was last used on this site. */
   const rememberProfileForTab = (url: string | undefined, id: string) => {

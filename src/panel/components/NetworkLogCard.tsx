@@ -43,6 +43,12 @@ export default function NetworkLogCard({
   // already listed stays, and nothing new can arrive until a script runs.
   const darkTab = capturing && !log.pageConnected && !log.tabClosed;
   const [filter, setFilter] = useState('');
+  /*
+   * A tab with the app in an iframe carries the shell's traffic too — analytics,
+   * the portal's own calls — mixed into one list with nothing to tell them
+   * apart. Once a working frame is chosen, this narrows the log to it.
+   */
+  const [thisFrameOnly, setThisFrameOnly] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selecting, setSelecting] = useState(false);
   const [marked, setMarked] = useState<string[]>([]);
@@ -53,13 +59,21 @@ export default function NetworkLogCard({
   const listRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
+  const canScope = log.workingFrameId !== undefined;
   const visible = useMemo(() => {
     const needle = filter.trim().toLowerCase();
-    const rows = needle
+    let rows = needle
       ? log.entries.filter((e) => e.url.toLowerCase().includes(needle))
       : log.entries;
+    if (thisFrameOnly && log.workingFrameId !== undefined) {
+      // Rows captured before the frame was chosen carry no frameId; they are
+      // not from a known other frame, so hiding them would look like data loss.
+      rows = rows.filter(
+        (entry) => entry.frameId === undefined || entry.frameId === log.workingFrameId,
+      );
+    }
     return [...rows].reverse();
-  }, [log.entries, filter]);
+  }, [log.entries, filter, thisFrameOnly, log.workingFrameId]);
 
   const selected = visible.find((exchange) => exchange.id === selectedId);
   const inFlight = log.entries.some((exchange) => exchange.outcome === 'pending');
@@ -159,6 +173,17 @@ export default function NetworkLogCard({
             onChange={(e) => setFilter(e.target.value)}
           />
         </div>
+
+        {canScope && (
+          <button
+            onClick={() => setThisFrameOnly((on) => !on)}
+            className={`btn btn-ghost btn-sm shrink-0 ${thisFrameOnly ? 'is-on' : ''}`}
+            title="Only the frame the panel is working in"
+            aria-pressed={thisFrameOnly}
+          >
+            This frame
+          </button>
+        )}
 
         <span className="shrink-0 font-mono text-[10.5px] tabular-nums text-faint">
           {filter.trim() ? `${visible.length}/${log.entries.length}` : log.entries.length}

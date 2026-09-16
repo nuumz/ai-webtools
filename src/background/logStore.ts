@@ -37,12 +37,22 @@ const tabLog = (tabId: number): TabLog => {
   return log;
 };
 
-export function addExchanges(tabId: number, exchanges: CapturedExchange[]): ExchangeMeta[] {
+/**
+ * `frameId` is stamped here rather than in the page: the MAIN-world interceptor
+ * has no way to learn its own frame id, while the worker is handed it on every
+ * port message. Without it two frames making the same request are two identical
+ * rows nothing can tell apart.
+ */
+export function addExchanges(
+  tabId: number,
+  frameId: number,
+  exchanges: CapturedExchange[],
+): ExchangeMeta[] {
   const log = tabLog(tabId);
   const changed: ExchangeMeta[] = [];
 
   for (const exchange of exchanges) {
-    const meta = toExchangeMeta(exchange);
+    const meta = { ...toExchangeMeta(exchange), frameId };
     const nextBytes =
       (exchange.requestBody?.text.length ?? 0) + (exchange.responseBody?.text.length ?? 0);
     const index = log.entries.findIndex((entry) => entry.id === meta.id);

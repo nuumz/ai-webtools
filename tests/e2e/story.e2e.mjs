@@ -88,6 +88,40 @@ export default async function run() {
   t.check('a strict story refuses what it does not cover', online.strictMiss.status, 501);
   t.check('strict only applies inside its pattern', online.uncovered.status, 404);
 
+  /*
+   * Where a sequence is up to is progress, not config. The bridge re-pushes on
+   * every storage change, and clearing the hit counts there sent a polling
+   * endpoint back to its first entry whenever anyone touched an unrelated
+   * setting in the panel — mid-run, with no visible cause.
+   */
+  const afterUnrelatedEdit = await page.evaluate(async ([json]) => {
+    window.dispatchEvent(new CustomEvent('__DEV_TOOL_SYNC_RULES__', { detail: json }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const response = await fetch('/api/job');
+    return JSON.parse(await response.text()).state;
+  }, [
+    // `armed` is what openPage adds; a re-push without it disarms the frame.
+    JSON.stringify({ ...config, armed: true, settings: { ...config.settings, redactKeys: ['token'] } }),
+  ]);
+  t.check('an unrelated setting change does not rewind a sequence', afterUnrelatedEdit, 'DONE');
+
+  // Editing the story itself is a different matter: those counts are stale.
+  const afterStoryEdit = await page.evaluate(async ([json]) => {
+    window.dispatchEvent(new CustomEvent('__DEV_TOOL_SYNC_RULES__', { detail: json }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const response = await fetch('/api/job');
+    return JSON.parse(await response.text()).state;
+  }, [
+    JSON.stringify({
+      ...config,
+      armed: true,
+      storyRules: config.storyRules.map((rule) =>
+        rule.urlPattern === '/api/job' ? { ...rule, bodyKeys: ['b_job1', 'b_job2'] } : rule,
+      ),
+    }),
+  ]);
+  t.check('editing the story does start the sequence over', afterStoryEdit, 'PENDING');
+
   // The real test of a recording: does it still work with the backend gone?
   server.close();
   const offline = await page.evaluate(async () => {

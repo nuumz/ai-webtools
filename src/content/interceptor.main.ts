@@ -67,6 +67,8 @@ function install(): void {
   let strictMatchers: ((url: string) => boolean)[] = [];
   /** How many times each story entry has answered in THIS frame. */
   const hits = new Map<string, number>();
+  /** The story rules `hits` is counting against, so a push that leaves them alone leaves the count alone. */
+  let storySignature = '';
   const bodyCache = new Map<string, string>();
   const pendingBodies = new Map<string, (text: string | undefined) => void>();
 
@@ -81,6 +83,7 @@ function install(): void {
         settings = { ...DEFAULT_SETTINGS, enabled: false, captureEnabled: false };
         activeRules = [];
         strictMatchers = [];
+        storySignature = '';
         hits.clear();
         return;
       }
@@ -95,7 +98,18 @@ function install(): void {
       };
       activeRules = compileRules([...(config.rules ?? []), ...(config.storyRules ?? [])]);
       strictMatchers = (config.strictPatterns ?? []).map(compilePattern);
-      hits.clear();
+      /*
+       * Where a story is up to is not config, it is progress. The bridge pushes
+       * on every storage change, so clearing here unconditionally rewound a
+       * `PENDING → RUNNING → DONE` sequence to its first entry whenever anyone
+       * touched a setting in the panel. Only a change to the story rules
+       * themselves invalidates the count.
+       */
+      const nextStories = JSON.stringify(config.storyRules ?? []);
+      if (nextStories !== storySignature) {
+        storySignature = nextStories;
+        hits.clear();
+      }
     } catch (err) {
       console.error('[Interceptor] Could not read config:', err);
     }

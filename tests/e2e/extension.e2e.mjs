@@ -348,6 +348,53 @@ export default async function run() {
     t.check(`the chosen frame is filled (${what})`, inApp?.email, 'only-the-app@dev.local');
     t.check(`and the shell around it is left alone (${what})`, inShell?.email, '');
 
+    // ----------------------------------------- following the frame's navigation
+    /*
+     * The frame id belongs to the frame, not the document, so a choice made once
+     * has to keep naming the same iframe after it moves. Both kinds of move
+     * matter: a route change inside the app (no document load, nothing used to
+     * be emitted at all) and a real navigation.
+     */
+    const frameIdBefore = appFrame?.frameId;
+
+    const appHandle = framed.frames().find((frame) => frame.url().includes('/demo/framed-app'));
+    await appHandle?.click('#next');
+    await framed.waitForTimeout(400);
+
+    const afterRoute = await worker.evaluate(async ([id]) => {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: id, allFrames: true },
+        func: () => location.href,
+      });
+      return results.map((entry) => ({ frameId: entry.frameId, url: entry.result }));
+    }, [framedTabId]);
+    const routed = afterRoute.find((frame) => frame.frameId === frameIdBefore);
+    t.assert(
+      `a route change keeps the same frame id (${what})`,
+      routed?.url.includes('step=2'),
+      JSON.stringify(afterRoute),
+    );
+
+    // And a real navigation of that same frame.
+    await appHandle?.evaluate(() => {
+      location.href = '/demo/framed-app?loaded=1';
+    });
+    await framed.waitForTimeout(700);
+
+    const afterLoad = await worker.evaluate(async ([id]) => {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: id, allFrames: true },
+        func: () => location.href,
+      });
+      return results.map((entry) => ({ frameId: entry.frameId, url: entry.result }));
+    }, [framedTabId]);
+    const reloaded = afterLoad.find((frame) => frame.frameId === frameIdBefore);
+    t.assert(
+      `and so does a real navigation (${what})`,
+      reloaded?.url.includes('loaded=1'),
+      JSON.stringify(afterLoad),
+    );
+
     await framed.close();
   }
 
