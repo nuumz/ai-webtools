@@ -164,6 +164,14 @@ export async function startServer() {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(readFileSync('demo/wizard.html', 'utf8'));
     }
+    if (url.pathname === '/demo/framed' || url.pathname === '/demo/framed.html') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      return res.end(readFileSync('demo/framed.html', 'utf8'));
+    }
+    if (url.pathname === '/demo/framed-app' || url.pathname === '/demo/framed-app.html') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      return res.end(readFileSync('demo/framed-app.html', 'utf8'));
+    }
     if (url.pathname === '/demo/frame.html') {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(readFileSync('demo/frame.html', 'utf8'));

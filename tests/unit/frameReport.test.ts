@@ -39,10 +39,13 @@ describe('reportOf', () => {
     // is not undefined — testing only for undefined threw on `.kind`, which is
     // what made both Fill and Read the page fail outright.
     const report = reportOf([
-      null,
-      undefined,
-      { kind: 'record', fields: [], url: 'https://app/step' },
-      { kind: 'error', message: 'TypeError: boom', url: 'https://app/other' },
+      { frameId: 0, result: null as never },
+      { frameId: 1, result: undefined },
+      { frameId: 2, result: { kind: 'record', fields: [], url: 'https://app/step' } },
+      {
+        frameId: 3,
+        result: { kind: 'error', message: 'TypeError: boom', url: 'https://app/other' },
+      },
     ]);
     expect(report).toEqual({
       frames: 4,

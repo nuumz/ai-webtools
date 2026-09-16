@@ -67,6 +67,12 @@ export function resolveProfile(profile: FormProfile, options: ResolveOptions = {
       selectors: field.selectors.filter((selector) => selector.value.trim().length > 0),
       value: values[field.key],
       framePattern: field.framePattern,
+      // `anchor` is the agent's only way to tell two matches of one selector
+      // apart, and `waitFor` its only way to wait for options that arrive late.
+      // Both were declared and consumed but never sent, so a repeated label was
+      // filled in whichever block resolved first.
+      anchor: field.anchor,
+      waitFor: field.waitFor,
       after: field.after,
     }));
 

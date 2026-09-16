@@ -29,6 +29,12 @@ export interface FrameFailure {
  * a device simulator that is at least two, and a count of one means the app's
  * own frame never answered.
  */
+/** One frame's answer, with the id Chrome returns alongside it. */
+export interface FrameAnswer {
+  frameId: number;
+  result: AgentResult | undefined;
+}
+
 export interface FrameReport {
   frames: number;
   answered: number;
@@ -43,7 +49,8 @@ export interface FrameReport {
  * so testing for `undefined` alone let a null straight through to `.kind` and
  * threw before either a fill or a read could report anything at all.
  */
-export function reportOf(results: (AgentResult | undefined | null)[]): FrameReport {
+export function reportOf(answers: FrameAnswer[]): FrameReport {
+  const results = answers.map((answer) => answer.result);
   return {
     frames: results.length,
     answered: results.filter((result) => result != null && result.kind !== 'error').length,
@@ -69,22 +76,27 @@ export async function activeTab(): Promise<chrome.tabs.Tab | undefined> {
   return tab;
 }
 
-export async function runFill(tabId: number, fields: ResolvedFillField[]): Promise<FillOutcome> {
-  const results = await execute(tabId, { kind: 'fill', fields });
+export async function runFill(
+  tabId: number,
+  fields: ResolvedFillField[],
+  frameId?: number,
+): Promise<FillOutcome> {
+  const answers = await execute(tabId, { kind: 'fill', fields }, frameId);
 
   const filled = new Set<string>();
   const skipped = new Map<string, SkippedField>();
   const rejected = new Map<string, RejectedField>();
-  for (const result of results) {
+  for (const { result } of answers) {
     if (result?.kind !== 'fill') continue;
     for (const key of result.filled) filled.add(key);
     for (const entry of result.skipped) skipped.set(entry.key, entry);
     for (const entry of result.rejected) rejected.set(entry.key, entry);
   }
-  // A frame that filled it outranks a frame that could not.
+  // A frame that filled it outranks a frame that could not. With a working
+  // frame chosen only that frame answers, so nothing can mask its failures.
   const explained = (key: string) => skipped.has(key) || rejected.has(key);
   return {
-    ...reportOf(results),
+    ...reportOf(answers),
     filled: [...filled],
     skipped: [...skipped.values()].filter((entry) => !filled.has(entry.key)),
     rejected: [...rejected.values()].filter((entry) => !filled.has(entry.key)),
@@ -118,11 +130,12 @@ export interface ScreenOutcome {
 export async function runScreen(
   tabId: number,
   signatures: { id: string; texts: string[] }[],
+  frameId?: number,
 ): Promise<ScreenOutcome> {
-  const results = await execute(tabId, { kind: 'screen', signatures });
+  const answers = await execute(tabId, { kind: 'screen', signatures }, frameId);
   const best = new Map<string, ScreenScore>();
   const sample: string[] = [];
-  for (const result of results) {
+  for (const { result } of answers) {
     if (result?.kind !== 'screen') continue;
     // The frame that sees the most of a screen is the frame showing it.
     for (const score of result.scores) {
@@ -157,13 +170,17 @@ export interface RecordOutcome extends FrameReport {
   fields: RecordedField[];
 }
 
-export async function runRecord(tabId: number, includeSecrets: boolean): Promise<RecordOutcome> {
-  const results = await execute(tabId, { kind: 'record', includeSecrets });
+export async function runRecord(
+  tabId: number,
+  includeSecrets: boolean,
+  frameId?: number,
+): Promise<RecordOutcome> {
+  const answers = await execute(tabId, { kind: 'record', includeSecrets }, frameId);
   const fields: RecordedField[] = [];
-  for (const result of results) {
+  for (const { result } of answers) {
     if (result?.kind === 'record') fields.push(...result.fields);
   }
-  return { ...reportOf(results), fields };
+  return { ...reportOf(answers), fields };
 }
 
 /**
@@ -193,14 +210,22 @@ export interface PickOutcome {
   selectors: FieldSelector[];
   label?: string;
   value?: string;
+  /** The frame the click landed in — which is also how a frame gets chosen. */
+  frameId: number;
 }
 
 /** Resolves once the user clicks in one frame; the other frames cancel themselves. */
-export async function runPick(tabId: number): Promise<PickOutcome | null> {
-  const results = await execute(tabId, { kind: 'pick', sessionId: randomId('pk_') });
-  for (const result of results) {
+export async function runPick(tabId: number, frameId?: number): Promise<PickOutcome | null> {
+  const answers = await execute(tabId, { kind: 'pick', sessionId: randomId('pk_') }, frameId);
+  for (const answer of answers) {
+    const result = answer.result;
     if (result?.kind === 'pick' && result.selectors && result.selectors.length > 0) {
-      return { selectors: result.selectors, label: result.label, value: result.value };
+      return {
+        selectors: result.selectors,
+        label: result.label,
+        value: result.value,
+        frameId: answer.frameId,
+      };
     }
   }
   return null;
@@ -209,14 +234,21 @@ export async function runPick(tabId: number): Promise<PickOutcome | null> {
 async function execute(
   tabId: number,
   command: Parameters<typeof formAgent>[0],
-): Promise<(AgentResult | undefined)[]> {
+  frameId?: number,
+): Promise<FrameAnswer[]> {
   const injected = await chrome.scripting.executeScript({
-    target: { tabId, allFrames: true },
+    // Naming the frame is what stops a fill meant for the app from also being
+    // written into the simulator wrapping it. `allFrames` and `frameIds` are
+    // mutually exclusive, hence the branch rather than an extra option.
+    target: frameId === undefined ? { tabId, allFrames: true } : { tabId, frameIds: [frameId] },
     func: formAgent,
     args: [command],
   });
   // Frames that cannot be injected (about:blank, sandboxed) simply return
   // nothing, which arrives as null; normalise so one absent shape reaches the
   // callers rather than two.
-  return injected.map((entry) => (entry.result ?? undefined) as AgentResult | undefined);
+  return injected.map((entry) => ({
+    frameId: entry.frameId,
+    result: (entry.result ?? undefined) as AgentResult | undefined,
+  }));
 }

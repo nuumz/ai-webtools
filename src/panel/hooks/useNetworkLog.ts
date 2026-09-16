@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { PORT_PANEL, type BgToPanel, type PanelToBg } from '../../shared/messages';
 import type { BodySnapshot, ExchangeMeta } from '../../shared/capture';
+import type { FrameInfo } from '../../shared/frames';
 
 export interface ExchangeBodies {
   found: boolean;
@@ -25,6 +26,13 @@ export interface NetworkLogState {
    */
   pageConnected: boolean;
   setRecording: (enabled: boolean) => void;
+  /** Every frame in the tab, shallowest first. The app is often not the top one. */
+  frames: FrameInfo[];
+  /** The frame the panel acts in; undefined means every frame, as it always did. */
+  workingFrameId?: number;
+  selectFrame: (frameId?: number) => void;
+  /** Re-ask the frames what they look like, for a list that is worth reading. */
+  refreshFrames: () => void;
   entries: ExchangeMeta[];
   dropped: number;
   bodies: Record<string, ExchangeBodies>;
@@ -69,6 +77,8 @@ export function useNetworkLog(): NetworkLogState {
   const [tabClosed, setTabClosed] = useState(false);
   const [recording, setRecordingState] = useState(false);
   const [pageConnected, setPageConnected] = useState(false);
+  const [frames, setFrames] = useState<FrameInfo[]>([]);
+  const [workingFrameId, setWorkingFrameId] = useState<number | undefined>(undefined);
   const [tabId, setTabId] = useState<number | undefined>(pinnedTabId);
   const [tabUrl, setTabUrl] = useState<string | undefined>(undefined);
   const [entries, setEntries] = useState<ExchangeMeta[]>([]);
@@ -134,6 +144,10 @@ export function useNetworkLog(): NetworkLogState {
             break;
           case 'tab/pages':
             setPageConnected(message.connected);
+            break;
+          case 'frame/list':
+            setFrames(message.frames);
+            setWorkingFrameId(message.workingFrameId);
             break;
           case 'log/reset':
             setEntries(message.entries);
@@ -234,6 +248,19 @@ export function useNetworkLog(): NetworkLogState {
     if (port) send(port, { kind: 'log/record', enabled });
   }, []);
 
+  const selectFrame = useCallback((frameId?: number) => {
+    // Optimistic: the worker confirms with the next frame/list, and a stale
+    // radio button for the length of one round trip reads as a dead control.
+    setWorkingFrameId(frameId);
+    const port = portRef.current;
+    if (port) send(port, { kind: 'frame/select', frameId });
+  }, []);
+
+  const refreshFrames = useCallback(() => {
+    const port = portRef.current;
+    if (port) send(port, { kind: 'frame/refresh' });
+  }, []);
+
   const clear = useCallback(() => {
     const port = portRef.current;
     if (port) send(port, { kind: 'log/clear' });
@@ -251,6 +278,10 @@ export function useNetworkLog(): NetworkLogState {
     recording,
     setRecording,
     pageConnected,
+    frames,
+    workingFrameId,
+    selectFrame,
+    refreshFrames,
     entries,
     dropped,
     bodies,

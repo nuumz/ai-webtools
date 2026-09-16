@@ -4,6 +4,7 @@
 import { normalizeSettings } from '../shared/storage';
 import { getBody } from '../shared/bodyStore';
 import { PORT_PAGE, type BgToPage, type PageToBg } from '../shared/messages';
+import type { FrameDescriptor } from '../shared/frames';
 import { originMatches, ruleAppliesToOrigin } from '../shared/match';
 import { DEFAULT_STRICT_PATTERN, entryToRule, type StoryEntry, type StoryMeta } from '../shared/story';
 import { onBus, postBus, writeStoredConfig } from '../shared/pageBus';
@@ -223,6 +224,48 @@ const scheduleReattach = (): void => {
   }, delay);
 };
 
+/**
+ * What this frame looks like, for the panel's frame list.
+ *
+ * The app under test is usually not the tab but an iframe inside it, and a
+ * list of URLs alone does not say which one that is — the count of fields a
+ * person could fill does. Cheap enough to answer on demand: one selector and
+ * one heading lookup.
+ */
+const describeSelf = (): FrameDescriptor => {
+  let inputs = 0;
+  let heading: string | undefined;
+  try {
+    const fields = document.querySelectorAll<HTMLElement>(
+      'input:not([type=hidden]):not([type=submit]):not([type=button]), select, textarea, [contenteditable=""], [contenteditable="true"]',
+    );
+    for (const field of fields) {
+      // offsetParent is null for display:none; a fixed element reports zero size.
+      if (field.offsetParent !== null || field.getClientRects().length > 0) inputs += 1;
+    }
+    heading = (document.querySelector('h1, h2')?.textContent ?? document.title ?? '')
+      .trim()
+      .slice(0, 80);
+  } catch {
+    // A sandboxed document can refuse; the URL alone still names the frame.
+  }
+
+  let depth = 0;
+  try {
+    // Allowed cross-origin: `parent` is on the short list a foreign window
+    // still exposes, so a frame can place itself without reading anything.
+    let frame: Window = window;
+    while (frame !== frame.parent && depth < 16) {
+      frame = frame.parent;
+      depth += 1;
+    }
+  } catch {
+    depth = 1;
+  }
+
+  return { url: location.href, depth, inputs, heading: heading || undefined };
+};
+
 const openPort = (): chrome.runtime.Port | undefined => {
   if (port) return port;
   try {
@@ -230,6 +273,10 @@ const openPort = (): chrome.runtime.Port | undefined => {
     opened.onMessage.addListener((raw: unknown) => {
       if (!raw || typeof raw !== 'object') return;
       const message = raw as BgToPage;
+      if (message.kind === 'page/describe') {
+        post({ kind: 'page/frame', info: describeSelf() });
+        return;
+      }
       if (message.kind !== 'page/armed') return;
       if (armed === message.armed && recording === message.recording) return;
       armed = message.armed;

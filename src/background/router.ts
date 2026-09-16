@@ -16,6 +16,7 @@ import {
   restoreFromSession,
 } from './logStore';
 import { isArmed, isRecording, restoreArmedTabs, setArmed, setRecording } from './armedTabs';
+import { TOP_FRAME_ID, type FrameInfo } from '../shared/frames';
 
 interface PanelState {
   windowId: number;
@@ -28,10 +29,29 @@ interface PanelState {
   pinned: boolean;
 }
 
+/**
+ * One frame's connection and what it looks like.
+ *
+ * `port.sender.frameId` is handed to us for free and belongs to the frame
+ * rather than the document, so it keeps naming the same iframe after that
+ * iframe navigates — which is what lets a working frame be chosen once.
+ */
+interface FrameEntry {
+  port: chrome.runtime.Port;
+  frameId: number;
+  url: string;
+  depth: number;
+  inputs: number;
+  heading?: string;
+}
+
 const panelPorts = new Map<chrome.runtime.Port, PanelState>();
-const pagePorts = new Map<number, Set<chrome.runtime.Port>>();
+const pagePorts = new Map<number, Map<number, FrameEntry>>();
 /** Last known top-frame URL per tab, learned from `page/hello` (no `tabs` permission needed). */
 const tabUrls = new Map<number, string>();
+/** The frame each tab's panel acts in. Absent means every frame, as before. */
+const workingFrames = new Map<number, number>();
+const WORKING_FRAMES_KEY = 'workingFrames';
 
 /*
  * Panel reconnect after an idle worker is torn down is not "the user closed
@@ -96,6 +116,7 @@ export function initRouter(options?: {
     clearTab(tabId);
     cancelDisarm(tabId);
     pagePorts.delete(tabId);
+    if (workingFrames.delete(tabId)) persistWorkingFrames();
     setRecording(tabId, false);
     if (setArmed(tabId, false)) onArmedChange?.();
     for (const [port, state] of panelPorts) {
@@ -192,6 +213,61 @@ function sendRecording(tabId: number): void {
   broadcast(tabId, (port) => sendToPanel(port, { kind: 'tab/recording', tabId, recording }));
 }
 
+/** The frames in a tab, shallowest first, with the one the panel acts in. */
+function frameList(tabId: number): FrameInfo[] {
+  const frames = pagePorts.get(tabId);
+  if (!frames) return [];
+  return [...frames.values()]
+    .map(({ frameId, url, depth, inputs, heading }) => ({ frameId, url, depth, inputs, heading }))
+    .sort((a, b) => a.depth - b.depth || a.frameId - b.frameId);
+}
+
+function sendFrames(tabId: number): void {
+  const frames = frameList(tabId);
+  const workingFrameId = workingFrames.get(tabId);
+  broadcast(tabId, (port) =>
+    sendToPanel(port, { kind: 'frame/list', tabId, frames, workingFrameId }),
+  );
+}
+
+/** Asks every frame in the tab what it looks like; each answers with `page/frame`. */
+function describeFrames(tabId: number): void {
+  const frames = pagePorts.get(tabId);
+  if (!frames) return;
+  for (const frame of frames.values()) sendToPage(frame.port, { kind: 'page/describe' });
+}
+
+/**
+ * The chosen frame survives the worker being torn down for being idle, the same
+ * way the armed and recording tab sets do.
+ */
+async function restoreWorkingFrames(): Promise<void> {
+  if (workingFrames.size > 0) return;
+  try {
+    const stored = await chrome.storage.session?.get(WORKING_FRAMES_KEY);
+    const pairs = stored?.[WORKING_FRAMES_KEY];
+    if (!Array.isArray(pairs)) return;
+    for (const pair of pairs) {
+      if (Array.isArray(pair) && typeof pair[0] === 'number' && typeof pair[1] === 'number') {
+        workingFrames.set(pair[0], pair[1]);
+      }
+    }
+  } catch {
+    // No session storage: the panel re-picks, which is the pre-existing behaviour.
+  }
+}
+
+function persistWorkingFrames(): void {
+  void chrome.storage.session
+    ?.set({ [WORKING_FRAMES_KEY]: [...workingFrames.entries()] })
+    .catch(() => undefined);
+}
+
+/** Which frame a tab's actions target, or undefined for every frame. */
+export function workingFrameFor(tabId: number): number | undefined {
+  return workingFrames.get(tabId);
+}
+
 function cancelDisarm(tabId: number): void {
   const timer = disarmTimers.get(tabId);
   if (timer === undefined) return;
@@ -221,41 +297,67 @@ function hasPanelFor(tabId: number): boolean {
 function handlePagePort(port: chrome.runtime.Port): void {
   const tabId = port.sender?.tab?.id;
   if (tabId === undefined) return;
+  // Free from the platform, and the only stable name a frame has. `sender.url`
+  // is the frame's own URL, not the page hosting it.
+  const frameId = port.sender?.frameId ?? TOP_FRAME_ID;
 
   let frames = pagePorts.get(tabId);
   if (!frames) {
-    frames = new Set();
+    frames = new Map();
     pagePorts.set(tabId, frames);
   }
   const first = frames.size === 0;
-  frames.add(port);
+  frames.set(frameId, {
+    port,
+    frameId,
+    url: port.sender?.url ?? '',
+    // Both are filled in by the frame's own `page/frame` reply; until then the
+    // top frame is the only one whose depth we can state.
+    depth: frameId === TOP_FRAME_ID ? 0 : 1,
+    inputs: 0,
+  });
   if (first) sendPages(tabId);
+  sendFrames(tabId);
   /*
    * A reload wakes a terminated worker. Answering before session inspect
    * state lands tells the page it is not recording and kills capture.
    */
   void restoreArmedTabs().then(() => {
-    if (!pagePorts.get(tabId)?.has(port)) return;
+    if (pagePorts.get(tabId)?.get(frameId)?.port !== port) return;
     sendToPage(port, { kind: 'page/armed', armed: isArmed(tabId), recording: isRecording(tabId) });
   });
 
   port.onDisconnect.addListener(() => {
-    frames.delete(port);
-    if (frames.size > 0) return;
+    // A frame that navigated reconnects under the same id, so only drop the
+    // entry when it is still the one this port owns.
+    if (frames.get(frameId)?.port === port) frames.delete(frameId);
+    if (frames.size > 0) {
+      sendFrames(tabId);
+      return;
+    }
     pagePorts.delete(tabId);
     sendPages(tabId);
+    sendFrames(tabId);
   });
 
   port.onMessage.addListener((raw) => {
-    void Promise.all([restoreFromSession(), restoreArmedTabs()]).then(() =>
-      handlePageMessage(tabId, raw as PageToBg),
+    void Promise.all([restoreFromSession(), restoreArmedTabs(), restoreWorkingFrames()]).then(() =>
+      handlePageMessage(tabId, frameId, raw as PageToBg),
     );
   });
 }
 
-function handlePageMessage(tabId: number, message: PageToBg): void {
+function handlePageMessage(tabId: number, frameId: number, message: PageToBg): void {
   switch (message.kind) {
-    case 'page/hello':
+    case 'page/hello': {
+      // Every frame's own URL, including an iframe that just navigated. The
+      // tab-level bookkeeping below still belongs to the top frame alone.
+      const entry = pagePorts.get(tabId)?.get(frameId);
+      if (entry) {
+        entry.url = message.url;
+        if (message.isTop) entry.depth = 0;
+        sendFrames(tabId);
+      }
       if (message.isTop) {
         tabUrls.set(tabId, message.url);
         // A new document starts a new log. A port reconnect after the worker
@@ -282,6 +384,17 @@ function handlePageMessage(tabId: number, message: PageToBg): void {
         });
       }
       break;
+    }
+    case 'page/frame': {
+      const entry = pagePorts.get(tabId)?.get(frameId);
+      if (!entry) break;
+      entry.url = message.info.url;
+      entry.depth = message.info.depth;
+      entry.inputs = message.info.inputs;
+      entry.heading = message.info.heading;
+      sendFrames(tabId);
+      break;
+    }
     case 'capture/exchange': {
       if (!isArmed(tabId) || !isRecording(tabId)) break;
       const entries = addExchanges(tabId, message.exchanges);
@@ -383,6 +496,18 @@ function handlePanelPort(port: chrome.runtime.Port): void {
         if (state.tabId === undefined) return;
         setTabRecording(state.tabId, message.enabled);
         break;
+      case 'frame/refresh':
+        if (state.tabId === undefined) return;
+        describeFrames(state.tabId);
+        break;
+      case 'frame/select': {
+        if (state.tabId === undefined) return;
+        if (message.frameId === undefined) workingFrames.delete(state.tabId);
+        else workingFrames.set(state.tabId, message.frameId);
+        persistWorkingFrames();
+        sendFrames(state.tabId);
+        break;
+      }
     }
   });
 }
@@ -414,6 +539,15 @@ async function attachToTab(port: chrome.runtime.Port, tabId: number): Promise<vo
     tabId,
     connected: (pagePorts.get(tabId)?.size ?? 0) > 0,
   });
+  await restoreWorkingFrames();
+  sendToPanel(port, {
+    kind: 'frame/list',
+    tabId,
+    frames: frameList(tabId),
+    workingFrameId: workingFrames.get(tabId),
+  });
+  // The counts a frame list is worth reading for arrive on the replies.
+  describeFrames(tabId);
   sendLogReset(port, tabId);
 }
 
@@ -444,7 +578,7 @@ function notifyPages(tabId: number): void {
     armed: isArmed(tabId),
     recording: isRecording(tabId),
   };
-  for (const frame of frames) sendToPage(frame, message);
+  for (const frame of frames.values()) sendToPage(frame.port, message);
 }
 
 function sendLogReset(port: chrome.runtime.Port, tabId: number): void {
