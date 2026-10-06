@@ -49,8 +49,20 @@ const panelPorts = new Map<chrome.runtime.Port, PanelState>();
 const pagePorts = new Map<number, Map<number, FrameEntry>>();
 /** Last known top-frame URL per tab, learned from `page/hello` (no `tabs` permission needed). */
 const tabUrls = new Map<number, string>();
-/** The frame each tab's panel acts in. Absent means every frame, as before. */
-const workingFrames = new Map<number, number>();
+/**
+ * The frame each tab's panel acts in. Absent means every frame, as before.
+ *
+ * The address is kept beside the id because the id does not survive the frame
+ * being replaced: a simulator that swaps its iframe, or an app that remounts
+ * one, comes back as a new frame id at the same address, and the panel was left
+ * pointing at a frame that no longer exists with no way back but picking again.
+ */
+interface WorkingFrame {
+  frameId: number;
+  url?: string;
+}
+
+const workingFrames = new Map<number, WorkingFrame>();
 const WORKING_FRAMES_KEY = 'workingFrames';
 
 /*
@@ -224,7 +236,7 @@ function frameList(tabId: number): FrameInfo[] {
 
 function sendFrames(tabId: number): void {
   const frames = frameList(tabId);
-  const workingFrameId = workingFrames.get(tabId);
+  const workingFrameId = workingFrames.get(tabId)?.frameId;
   broadcast(tabId, (port) =>
     sendToPanel(port, { kind: 'frame/list', tabId, frames, workingFrameId }),
   );
@@ -248,8 +260,12 @@ async function restoreWorkingFrames(): Promise<void> {
     const pairs = stored?.[WORKING_FRAMES_KEY];
     if (!Array.isArray(pairs)) return;
     for (const pair of pairs) {
-      if (Array.isArray(pair) && typeof pair[0] === 'number' && typeof pair[1] === 'number') {
-        workingFrames.set(pair[0], pair[1]);
+      if (!Array.isArray(pair) || typeof pair[0] !== 'number') continue;
+      // A session written before the address was stored carries a bare id.
+      const value = pair[1];
+      if (typeof value === 'number') workingFrames.set(pair[0], { frameId: value });
+      else if (value && typeof value === 'object' && typeof value.frameId === 'number') {
+        workingFrames.set(pair[0], { frameId: value.frameId, url: value.url });
       }
     }
   } catch {
@@ -265,7 +281,7 @@ function persistWorkingFrames(): void {
 
 /** Which frame a tab's actions target, or undefined for every frame. */
 export function workingFrameFor(tabId: number): number | undefined {
-  return workingFrames.get(tabId);
+  return workingFrames.get(tabId)?.frameId;
 }
 
 /**
@@ -274,9 +290,46 @@ export function workingFrameFor(tabId: number): number | undefined {
  * tab would look at the shell instead of the app.
  */
 export function workingFrameUrlFor(tabId: number): string | undefined {
-  const frameId = workingFrames.get(tabId);
-  if (frameId === undefined) return undefined;
-  return pagePorts.get(tabId)?.get(frameId)?.url || undefined;
+  const working = workingFrames.get(tabId);
+  if (working === undefined) return undefined;
+  return pagePorts.get(tabId)?.get(working.frameId)?.url || working.url || undefined;
+}
+
+/**
+ * Two addresses that are the same screen.
+ *
+ * Origin and path only: the app's own query string carries the proposal it is
+ * showing, and a frame that came back for the next proposal is still the frame
+ * the panel was working in. Anything looser would adopt the simulator's shell
+ * when it happens to be served from the same origin.
+ */
+function sameScreen(left: string, right: string): boolean {
+  try {
+    const a = new URL(left);
+    const b = new URL(right);
+    return a.origin === b.origin && a.pathname === b.pathname;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Hands the working-frame role to a frame that just took the old one's place.
+ *
+ * A cross-origin iframe gets a new frame id every time it is replaced, so the
+ * panel's chosen frame reads as "gone" after a reload of the app inside the
+ * simulator — and every command fails until the user picks again, which is what
+ * made the panel look broken. Adoption is deliberately narrow: only when the
+ * old frame is really absent, and only for the same screen.
+ */
+function adoptReplacedFrame(tabId: number, frameId: number, url: string): void {
+  const working = workingFrames.get(tabId);
+  if (working === undefined || working.frameId === frameId) return;
+  if (working.url === undefined || !url) return;
+  if (pagePorts.get(tabId)?.has(working.frameId)) return;
+  if (!sameScreen(url, working.url)) return;
+  workingFrames.set(tabId, { frameId, url });
+  persistWorkingFrames();
 }
 
 function cancelDisarm(tabId: number): void {
@@ -318,16 +371,24 @@ function handlePagePort(port: chrome.runtime.Port): void {
     pagePorts.set(tabId, frames);
   }
   const first = frames.size === 0;
+  const frameUrl = port.sender?.url ?? '';
   frames.set(frameId, {
     port,
     frameId,
-    url: port.sender?.url ?? '',
+    url: frameUrl,
     // Both are filled in by the frame's own `page/frame` reply; until then the
     // top frame is the only one whose depth we can state.
     depth: frameId === TOP_FRAME_ID ? 0 : 1,
     inputs: 0,
   });
   if (first) sendPages(tabId);
+  // Before the list goes out, so the panel never sees its frame as gone when a
+  // replacement for it is already connected.
+  void restoreWorkingFrames().then(() => {
+    if (pagePorts.get(tabId)?.get(frameId)?.port !== port) return;
+    adoptReplacedFrame(tabId, frameId, frameUrl);
+    sendFrames(tabId);
+  });
   sendFrames(tabId);
   /*
    * A reload wakes a terminated worker. Answering before session inspect
@@ -523,7 +584,10 @@ function handlePanelPort(port: chrome.runtime.Port): void {
       case 'frame/select': {
         if (state.tabId === undefined) return;
         if (message.frameId === undefined) workingFrames.delete(state.tabId);
-        else workingFrames.set(state.tabId, message.frameId);
+        else {
+          const chosen = pagePorts.get(state.tabId)?.get(message.frameId);
+          workingFrames.set(state.tabId, { frameId: message.frameId, url: chosen?.url });
+        }
         persistWorkingFrames();
         sendFrames(state.tabId);
         break;
@@ -564,7 +628,7 @@ async function attachToTab(port: chrome.runtime.Port, tabId: number): Promise<vo
     kind: 'frame/list',
     tabId,
     frames: frameList(tabId),
-    workingFrameId: workingFrames.get(tabId),
+    workingFrameId: workingFrames.get(tabId)?.frameId,
   });
   // The counts a frame list is worth reading for arrive on the replies.
   describeFrames(tabId);

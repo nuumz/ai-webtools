@@ -102,6 +102,8 @@ export const STORAGE_KEYS = {
   profiles: 'formProfiles',
   cases: 'formCases',
   counters: 'counters',
+  actions: 'actionScripts',
+  appState: 'appActionState',
 } as const;
 
 /** Entries live under their own key so a storage change touches one story, not all of them. */

@@ -1,4 +1,4 @@
-export type TabId = 'network' | 'mocks' | 'fill';
+export type TabId = 'network' | 'mocks' | 'fill' | 'control' | 'app';
 
 interface Tab {
   id: TabId;

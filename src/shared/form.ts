@@ -7,7 +7,21 @@ import { compilePattern } from './match';
 import type { FormFillField } from './types';
 
 /** Ordered by how well each survives a re-render, best first. */
-export type FieldStrategy = 'testid' | 'id' | 'name' | 'label' | 'aria' | 'placeholder' | 'css';
+/**
+ * `text` names an element by the words printed on it — what a button has and a
+ * form control does not. It sits beside the field strategies rather than in a
+ * list of its own because an action step finds its target exactly the way a
+ * field does, and the picker emits one chain for both.
+ */
+export type FieldStrategy =
+  | 'testid'
+  | 'id'
+  | 'name'
+  | 'label'
+  | 'aria'
+  | 'placeholder'
+  | 'text'
+  | 'css';
 
 export interface FieldSelector {
   strategy: FieldStrategy;

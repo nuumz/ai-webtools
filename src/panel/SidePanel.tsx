@@ -3,6 +3,8 @@ import type { ReactNode } from 'react';
 import RuleForm, { type RuleDraft } from './components/RuleForm';
 import RuleList from './components/RuleList';
 import ProfilesCard from './components/ProfilesCard';
+import ControlCard from './components/ControlCard';
+import AppActionsCard, { BRIDGE, type AppAction } from './components/AppActionsCard';
 import FramePicker from './components/FramePicker';
 import RecordedFieldsDialog from './components/RecordedFieldsDialog';
 import SettingsCard from './components/SettingsCard';
@@ -12,6 +14,8 @@ import NetworkLogCard from './components/NetworkLogCard';
 import StoriesCard from './components/StoriesCard';
 import { useNetworkLog } from './hooks/useNetworkLog';
 import {
+  loadActions,
+  loadAppState,
   loadCases,
   loadCounters,
   loadProfiles,
@@ -20,6 +24,8 @@ import {
   loadStories,
   loadStoryEntries,
   removeStory,
+  saveActions,
+  saveAppState,
   saveCases,
   saveCounters,
   saveProfiles,
@@ -44,14 +50,20 @@ import { resolveProfile } from '../shared/resolveProfile';
 import {
   activeTab,
   FrameGoneError,
+  runAct,
   runFill,
+  runPageCall,
+  runPageEval,
   runPick,
+  runReplay,
   explainEmpty,
   runRecord,
   runScreen,
   type FillOutcome,
   type ScreenOutcome,
 } from '../inject/run';
+import type { PageOutcome, ReplayRequest, ReplayResult } from '../inject/pageScript';
+import type { ActionScript, ActionStep, StepOutcome } from '../shared/actions';
 import { collectGarbage, putBody, trimBodies, usageBytes } from '../shared/bodyStore';
 import {
   downloadState,
@@ -90,6 +102,16 @@ export default function SidePanel() {
   const [storageBusy, setStorageBusy] = useState<string | null>(null);
   const [tab, setTab] = useState<TabId>('network');
   const [mockView, setMockView] = useState<'rules' | 'stories'>('rules');
+  const [scripts, setScripts] = useState<ActionScript[]>([]);
+  const [scriptId, setScriptId] = useState<string | undefined>(undefined);
+  const [stepOutcomes, setStepOutcomes] = useState<Record<string, StepOutcome>>({});
+  const [acting, setActing] = useState(false);
+  const [called, setCalled] = useState<PageOutcome | undefined>(undefined);
+  const [replayed, setReplayed] = useState<ReplayResult | undefined>(undefined);
+  const [cisId, setCisId] = useState('');
+  const [bridgeVersion, setBridgeVersion] = useState<number | undefined>(undefined);
+  const [appRunning, setAppRunning] = useState<string | undefined>(undefined);
+  const [appAnswer, setAppAnswer] = useState<PageOutcome | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ruleFormOpen, setRuleFormOpen] = useState(false);
   const log = useNetworkLog();
@@ -101,6 +123,11 @@ export default function SidePanel() {
     void loadCounters().then(setCounters);
     void usageBytes().then(setUsage);
     void loadCases().then(setCases);
+    void loadAppState().then((state) => setCisId(state.cisId));
+    void loadActions().then((loaded) => {
+      setScripts(loaded);
+      setScriptId((current) => current ?? loaded[0]?.id);
+    });
     void loadProfiles().then((loaded) => {
       setProfiles(loaded);
       setProfileId((current) => current ?? loaded[0]?.id);
@@ -117,11 +144,13 @@ export default function SidePanel() {
       const settingsChange = changes[STORAGE_KEYS.settings];
       const storyChange = changes[STORAGE_KEYS.stories];
       const caseChange = changes[STORAGE_KEYS.cases];
+      const actionChange = changes[STORAGE_KEYS.actions];
       if (ruleChange) setRules((ruleChange.newValue as MutationRule[]) ?? []);
       if (profileChange) setProfiles((profileChange.newValue as FormProfile[]) ?? []);
       if (settingsChange) setSettings(normalizeSettings(settingsChange.newValue));
       if (storyChange) setStories((storyChange.newValue as StoryMeta[]) ?? []);
       if (caseChange) setCases((caseChange.newValue as FormCase[]) ?? []);
+      if (actionChange) setScripts((actionChange.newValue as ActionScript[]) ?? []);
     };
     chrome.storage.onChanged.addListener(listener);
     return () => chrome.storage.onChanged.removeListener(listener);
@@ -481,6 +510,177 @@ export default function SidePanel() {
     }
   };
 
+  const persistScripts = (next: ActionScript[]) => {
+    setScripts(next);
+    void saveActions(next);
+  };
+
+  /*
+   * Driving the page, unlike filling it, acts in the working frame only. Every
+   * frame running the same script means every frame clicking the same button —
+   * the device simulator's shell and the app inside it both — and a double
+   * submit is exactly what a replayable script must not produce.
+   */
+  const runScript = async (steps: ActionStep[]) => {
+    try {
+      const browserTab = await targetTab();
+      if (browserTab?.id === undefined) return;
+      setActing(true);
+      const outcome = await runAct(browserTab.id, steps, log.workingFrameId);
+      setStepOutcomes((current) => {
+        const next = { ...current };
+        for (const entry of outcome.outcomes) next[entry.id] = entry;
+        return next;
+      });
+      const failed = outcome.outcomes.find((entry) => !entry.ok);
+      if (outcome.outcomes.length === 0) {
+        showToast(explainEmpty(outcome), 6000);
+        return;
+      }
+      const label = steps.find((step) => step.id === failed?.id)?.label;
+      showToast(
+        failed ? `Stopped at “${label || 'step'}” — ${failed.why ?? 'failed'}` : `Ran ${outcome.outcomes.length} step(s)`,
+        failed ? 6000 : 2500,
+      );
+    } catch (err) {
+      if (err instanceof FrameGoneError) {
+        forgetWorkingFrame();
+        return;
+      }
+      console.error('[Panel] Action failed:', err);
+      showToast('Action failed — see console');
+    } finally {
+      setActing(false);
+    }
+  };
+
+  const pickForStep = async (stepId: string) => {
+    const script = scripts.find((entry) => entry.id === scriptId) ?? scripts[0];
+    if (!script) return;
+    try {
+      const browserTab = await targetTab();
+      if (browserTab?.id === undefined) return;
+      showToast('Click the element on the page…');
+      const picked = await runPick(browserTab.id);
+      if (!picked) {
+        showToast('Picking cancelled');
+        return;
+      }
+      persistScripts(
+        scripts.map((entry) =>
+          entry.id !== script.id
+            ? entry
+            : {
+                ...entry,
+                steps: entry.steps.map((step) =>
+                  step.id === stepId
+                    ? { ...step, selectors: picked.selectors, label: step.label || (picked.label ?? '') }
+                    : step,
+                ),
+              },
+        ),
+      );
+      showToast('Element set');
+    } catch (err) {
+      console.error('[Panel] Pick failed:', err);
+      showToast('Pick failed — see console');
+    }
+  };
+
+  const callPage = async (path: string, args: unknown[] | undefined) => {
+    const browserTab = await targetTab();
+    if (browserTab?.id === undefined) return;
+    try {
+      setCalled(await runPageCall(browserTab.id, path, args, log.workingFrameId));
+    } catch (err) {
+      if (err instanceof FrameGoneError) {
+        forgetWorkingFrame();
+        return;
+      }
+      console.error('[Panel] Call failed:', err);
+      setCalled({ kind: 'error', message: 'Call failed — see console' });
+    }
+  };
+
+  const evalPage = async (source: string) => {
+    const browserTab = await targetTab();
+    if (browserTab?.id === undefined) return;
+    try {
+      setCalled(await runPageEval(browserTab.id, source, log.workingFrameId));
+    } catch (err) {
+      if (err instanceof FrameGoneError) {
+        forgetWorkingFrame();
+        return;
+      }
+      console.error('[Panel] Evaluate failed:', err);
+      setCalled({ kind: 'error', message: 'Evaluate failed — see console' });
+    }
+  };
+
+  const replayRequest = async (request: ReplayRequest) => {
+    const browserTab = await targetTab();
+    if (browserTab?.id === undefined) return;
+    try {
+      setReplayed(await runReplay(browserTab.id, request, log.workingFrameId));
+    } catch (err) {
+      if (err instanceof FrameGoneError) {
+        forgetWorkingFrame();
+        return;
+      }
+      console.error('[Panel] Replay failed:', err);
+      showToast('Replay failed — see console');
+    }
+  };
+
+  /*
+   * The app's own simulation entry points, which live on `window` in the page's
+   * world. They are read through the same call path as anything else in the
+   * Control tab — the buttons only save the user spelling it out.
+   */
+  const checkBridge = async () => {
+    const browserTab = await targetTab();
+    if (browserTab?.id === undefined) return;
+    try {
+      const outcome = await runPageCall(browserTab.id, `${BRIDGE}.version`, undefined, log.workingFrameId);
+      setBridgeVersion(outcome.kind === 'value' ? Number(outcome.value.text) || 0 : 0);
+    } catch (err) {
+      if (err instanceof FrameGoneError) {
+        forgetWorkingFrame();
+        return;
+      }
+      console.error('[Panel] Bridge check failed:', err);
+      setBridgeVersion(0);
+    }
+  };
+
+  const runAppAction = async (action: AppAction) => {
+    const browserTab = await targetTab();
+    if (browserTab?.id === undefined) return;
+    setAppRunning(action.id);
+    setAppAnswer(undefined);
+    try {
+      const outcome = await runPageCall(
+        browserTab.id,
+        `${BRIDGE}.${action.fn}`,
+        action.needsCis ? [cisId.trim()] : [],
+        log.workingFrameId,
+      );
+      setAppAnswer(outcome);
+      // A missing entry point is also the answer to "is the app reachable" —
+      // without this the banner would still claim a working bridge.
+      if (outcome.kind === 'missing') setBridgeVersion(0);
+    } catch (err) {
+      if (err instanceof FrameGoneError) {
+        forgetWorkingFrame();
+        return;
+      }
+      console.error('[Panel] App action failed:', err);
+      setAppAnswer({ kind: 'error', message: 'The call failed — see console' });
+    } finally {
+      setAppRunning(undefined);
+    }
+  };
+
   const recordForm = async (secrets = includeSecrets) => {
     if (!activeProfile) return;
     try {
@@ -709,6 +909,8 @@ export default function SidePanel() {
             { id: 'network', label: 'Network', count: log.entries.length },
             { id: 'mocks', label: 'Mocks', count: activeCount + activeStories },
             { id: 'fill', label: 'Fill', count: activeProfile?.fields.length },
+            { id: 'control', label: 'Control' },
+            { id: 'app', label: 'App' },
           ]}
         />
       </header>
@@ -837,6 +1039,72 @@ export default function SidePanel() {
               onFill={() => void fillForm()}
               onRecord={() => void recordForm()}
               onPick={(fieldId) => void pickField(fieldId)}
+            />
+          </>
+        )}
+
+        {tab === 'control' && (
+          <>
+            <FramePicker
+              frames={log.frames}
+              workingFrameId={log.workingFrameId}
+              busy={log.tabClosed}
+              onSelect={log.selectFrame}
+              onRefresh={log.refreshFrames}
+              onPick={() => void pickWorkingFrame()}
+            />
+            <ControlCard
+              scripts={scripts}
+              activeId={scriptId}
+              outcomes={stepOutcomes}
+              running={acting}
+              disabled={log.tabClosed}
+              called={called}
+              replayed={replayed}
+              onSelect={setScriptId}
+              onCreate={(script) => {
+                persistScripts([...scripts, script]);
+                setScriptId(script.id);
+              }}
+              onChange={(script) =>
+                persistScripts(scripts.map((entry) => (entry.id === script.id ? script : entry)))
+              }
+              onDelete={(id) => {
+                const next = scripts.filter((entry) => entry.id !== id);
+                persistScripts(next);
+                setScriptId(next[0]?.id);
+              }}
+              onPickStep={(stepId) => void pickForStep(stepId)}
+              onRun={(steps) => void runScript(steps)}
+              onCall={(path, args) => void callPage(path, args)}
+              onEval={(source) => void evalPage(source)}
+              onReplay={(request) => void replayRequest(request)}
+            />
+          </>
+        )}
+
+        {tab === 'app' && (
+          <>
+            <FramePicker
+              frames={log.frames}
+              workingFrameId={log.workingFrameId}
+              busy={log.tabClosed}
+              onSelect={log.selectFrame}
+              onRefresh={log.refreshFrames}
+              onPick={() => void pickWorkingFrame()}
+            />
+            <AppActionsCard
+              cisId={cisId}
+              bridgeVersion={bridgeVersion}
+              running={appRunning}
+              answer={appAnswer}
+              disabled={log.tabClosed}
+              onChangeCis={(next) => {
+                setCisId(next);
+                void saveAppState({ cisId: next });
+              }}
+              onRun={(action) => void runAppAction(action)}
+              onCheckBridge={() => void checkBridge()}
             />
           </>
         )}

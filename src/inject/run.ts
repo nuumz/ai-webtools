@@ -6,7 +6,17 @@
  * `activeTab` — the latter is revoked on navigation, so the button would go
  * quiet the moment the user moved to the next page.
  */
+import { mergeStepOutcomes, type ActionStep, type StepOutcome } from '../shared/actions';
+import { DEFAULT_BODY_LIMIT } from '../shared/capture';
 import type { FieldSelector, ResolvedFillField } from '../shared/form';
+import {
+  pageCall,
+  pageEval,
+  pageReplay,
+  type PageOutcome,
+  type ReplayRequest,
+  type ReplayResult,
+} from './pageScript';
 import { randomId } from '../shared/ids';
 import {
   formAgent,
@@ -228,6 +238,28 @@ export function explainEmpty(report: FrameReport): string {
   return `Nothing to read in ${report.answered} frame(s) — no fields the agent can see.`;
 }
 
+export interface ActOutcome extends FrameReport {
+  outcomes: StepOutcome[];
+}
+
+/**
+ * Runs an action script in the page.
+ *
+ * Unlike a fill, the steps are stateful: the script stops at its first failure
+ * in each frame, so a frame that cannot see the app reports one failed step and
+ * nothing more. `mergeStepOutcomes` is what keeps that from reading as a broken
+ * script — the frame that did the work is the one that answers for each step.
+ */
+export async function runAct(
+  tabId: number,
+  steps: ActionStep[],
+  frameId?: number,
+): Promise<ActOutcome> {
+  const answers = await execute(tabId, { kind: 'act', steps }, frameId);
+  const perFrame = answers.flatMap(({ result }) => (result?.kind === 'act' ? [result.outcomes] : []));
+  return { ...reportOf(answers), outcomes: mergeStepOutcomes(perFrame) };
+}
+
 export interface PickOutcome {
   selectors: FieldSelector[];
   label?: string;
@@ -251,6 +283,77 @@ export async function runPick(tabId: number, frameId?: number): Promise<PickOutc
     }
   }
   return null;
+}
+
+/**
+ * Runs one of the page-world functions.
+ *
+ * Separate from `execute` because of `world: 'MAIN'`: the form agent must stay
+ * in the isolated world — that is where its own globals, its picker overlay and
+ * its idempotence flags live — while these exist only to reach the page's.
+ * One frame at a time, since "which copy of the app answered" is not a question
+ * a call or a replay can be merged across.
+ */
+async function executeInPage<A extends unknown[], R>(
+  tabId: number,
+  func: (...args: A) => Promise<R>,
+  args: A,
+  frameId?: number,
+): Promise<R | undefined> {
+  let injected;
+  try {
+    injected = await chrome.scripting.executeScript({
+      target: frameId === undefined ? { tabId } : { tabId, frameIds: [frameId] },
+      world: 'MAIN',
+      func,
+      args,
+    });
+  } catch (error) {
+    if (frameId !== undefined && isFrameGone(error)) throw new FrameGoneError(frameId);
+    throw error;
+  }
+  return (injected[0]?.result ?? undefined) as R | undefined;
+}
+
+/** Calls `window.<path>(...args)` in the page. `args` omitted reads the value instead. */
+export async function runPageCall(
+  tabId: number,
+  path: string,
+  args: unknown[] | undefined,
+  frameId?: number,
+): Promise<PageOutcome> {
+  const outcome = await executeInPage(tabId, pageCall, [path, args], frameId);
+  return outcome ?? { kind: 'error', message: 'The frame did not answer.' };
+}
+
+/** Evaluates an expression with the page's globals; a strict CSP can refuse it. */
+export async function runPageEval(
+  tabId: number,
+  source: string,
+  frameId?: number,
+): Promise<PageOutcome> {
+  const outcome = await executeInPage(tabId, pageEval, [source], frameId);
+  return outcome ?? { kind: 'error', message: 'The frame did not answer.' };
+}
+
+/** Re-sends a request through the page's own `fetch`, so its cookies and wrappers apply. */
+export async function runReplay(
+  tabId: number,
+  request: ReplayRequest,
+  frameId?: number,
+): Promise<ReplayResult> {
+  const result = await executeInPage(tabId, pageReplay, [request, DEFAULT_BODY_LIMIT], frameId);
+  if (result) return result;
+  return {
+    ok: false,
+    status: 0,
+    statusText: '',
+    headers: [],
+    body: '',
+    truncated: false,
+    ms: 0,
+    error: 'The frame did not answer.',
+  };
 }
 
 async function execute(

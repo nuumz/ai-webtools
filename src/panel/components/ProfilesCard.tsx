@@ -23,7 +23,7 @@ function pathOf(url: string): string {
   }
 }
 
-const STRATEGIES: FieldStrategy[] = ['testid', 'id', 'name', 'label', 'aria', 'placeholder', 'css'];
+const STRATEGIES: FieldStrategy[] = ['testid', 'id', 'name', 'label', 'aria', 'placeholder', 'text', 'css'];
 
 const SOURCE_KINDS = [
   { value: 'literal', label: 'Text' },

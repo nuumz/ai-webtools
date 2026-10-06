@@ -6,6 +6,7 @@
  * its arguments and its own nested helpers. Type-only imports are erased by
  * TypeScript and are therefore safe.
  */
+import type { ActionStep, StepOutcome } from '../shared/actions';
 import type { FieldSelector, ResolvedFillField } from '../shared/form';
 
 export interface RecordedField {
@@ -33,7 +34,9 @@ export type AgentCommand =
   /** Which of these screens is on show right now. */
   | { kind: 'screen'; signatures: { id: string; texts: string[] }[] }
   /** `sessionId` scopes the cancel broadcast to this picking session. */
-  | { kind: 'pick'; sessionId: string };
+  | { kind: 'pick'; sessionId: string }
+  /** Drive the app: click, wait, check. Steps run in order and stop at the first failure. */
+  | { kind: 'act'; steps: ActionStep[] };
 
 /** Why a field was left alone: it is on the screen, but not fillable right now. */
 export interface SkippedField {
@@ -66,6 +69,11 @@ export type AgentResult =
   | { kind: 'screen'; scores: { id: string; matched: number; total: number }[]; sample: string[] }
   /** `selectors: null` means the user cancelled, or another frame was picked. */
   | { kind: 'pick'; selectors: FieldSelector[] | null; label?: string; value?: string }
+  /**
+   * One entry per step this frame reached. A frame that stopped early reports
+   * fewer steps than it was given — the panel merges frames before judging.
+   */
+  | { kind: 'act'; outcomes: StepOutcome[]; url: string }
   /**
    * A frame where the agent itself failed.
    *
@@ -224,6 +232,14 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
     const CONTROLS = 'input, select, textarea, [contenteditable]';
 
     /**
+     * What a person can press. `[role=tab]` and `[role=button]` are here because
+     * the component kits this extension is used on build both out of divs, and a
+     * script that cannot name a tab cannot reach the step behind it.
+     */
+    const CLICKABLES =
+      'button, a[href], [role="button"], [role="tab"], [role="menuitem"], input[type="button"], input[type="submit"], input[type="reset"], summary';
+
+    /**
      * The control a label names: by `for`, then one it wraps, then the first in
      * its own row. Thai forms commonly print the label as a sibling above the
      * input with neither `for` nor nesting, which the first two rules cannot see.
@@ -342,6 +358,20 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
           return deepQuery(`[aria-label="${escapeAttr(value)}"]`);
         case 'placeholder':
           return deepQuery(`[placeholder="${escapeAttr(value)}"]`);
+        case 'text': {
+          // What the user reads on the thing they click. Only elements that are
+          // clickable in their own right qualify: the words on a button are also
+          // inside its wrapper, its card and <body>, and matching those would
+          // make every click land on whatever ancestor came first.
+          const exact: Element[] = [];
+          const loose: Element[] = [];
+          for (const element of deepQuery(CLICKABLES)) {
+            const text = visibleTextOf(element);
+            if (normalise(text) === normalise(value)) exact.push(element);
+            else if (textMatches(text, value)) loose.push(element);
+          }
+          return exact.length > 0 ? exact : loose;
+        }
         case 'css':
           return deepQuery(value);
         case 'label': {
@@ -715,6 +745,14 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
       const placeholder = element.getAttribute('placeholder');
       if (placeholder) selectors.push({ strategy: 'placeholder', value: placeholder });
 
+      // Only for something clickable, and only its own text: a generated css
+      // path survives one re-render, the words on the button survive the next
+      // redesign of its markup.
+      if (element.matches(CLICKABLES)) {
+        const own = visibleTextOf(element).trim();
+        if (own && own.length <= 80) selectors.push({ strategy: 'text', value: own });
+      }
+
       const path = cssPath(element);
       if (path) selectors.push({ strategy: 'css', value: path });
 
@@ -826,6 +864,82 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
       }
 
       return { kind: 'fill', filled, misses, skipped, rejected };
+    }
+
+    if (command.kind === 'act') {
+      /**
+       * A click is a gesture, not an event. `element.click()` alone dispatches
+       * `click` and nothing else, so a button that reacts on `mousedown` — the
+       * bank's kit does, which is why the picker settles on the same event —
+       * never fires. The full sequence is what a real pointer produces.
+       */
+      function clickLike(element: Element): void {
+        const point = { bubbles: true, cancelable: true, composed: true, button: 0 };
+        for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup']) {
+          const Ctor = type.startsWith('pointer') && typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
+          element.dispatchEvent(new Ctor(type, point));
+        }
+        if (element instanceof HTMLElement) element.click();
+      }
+
+      /**
+       * Re-resolves until the element is usable. A script runs right after the
+       * step before it changed the screen, so the first look is the one most
+       * likely to be too early — waiting is the normal case, not the exception.
+       */
+      async function settle(step: ActionStep): Promise<Resolution> {
+        const deadline = Date.now() + (step.timeoutMs ?? 3000);
+        let resolution = resolveField(step.selectors);
+        while (resolution.kind !== 'ok' && Date.now() < deadline) {
+          await sleep(100);
+          resolution = resolveField(step.selectors);
+        }
+        return resolution;
+      }
+
+      async function runStep(step: ActionStep): Promise<StepOutcome> {
+        if (step.kind === 'waitMs') {
+          await sleep(step.timeoutMs ?? 0);
+          return { id: step.id, ok: true };
+        }
+
+        if (step.kind === 'assertText') {
+          const wanted = normalise(step.text ?? '');
+          const deadline = Date.now() + (step.timeoutMs ?? 3000);
+          do {
+            if (normalise(visibleTextOf(document.body)).includes(wanted)) return { id: step.id, ok: true };
+            await sleep(100);
+          } while (Date.now() < deadline);
+          return { id: step.id, ok: false, why: 'text' };
+        }
+
+        const resolution = await settle(step);
+        if (resolution.kind === 'skip') return { id: step.id, ok: false, why: resolution.why };
+        // A `waitFor` that ran out of time and a selector that matches nothing
+        // are the same observation here, but not the same bug: waiting says the
+        // screen never arrived, missing says the selector is wrong.
+        if (resolution.kind === 'missing') {
+          return { id: step.id, ok: false, why: step.kind === 'waitFor' ? 'timeout' : 'missing' };
+        }
+        if (step.kind === 'waitFor') return { id: step.id, ok: true };
+
+        resolution.element.scrollIntoView({ block: 'center' });
+        clickLike(resolution.element);
+        return { id: step.id, ok: true };
+      }
+
+      const outcomes: StepOutcome[] = [];
+      for (const step of command.steps) {
+        // Substring match, not a glob — same rule as a fill field.
+        if (step.framePattern && !location.href.includes(step.framePattern)) continue;
+        const outcome = await runStep(step);
+        outcomes.push(outcome);
+        // A script is a sequence: once a step fails the screen is not where the
+        // next step expects it, and clicking on anyway is how a test fills the
+        // wrong form.
+        if (!outcome.ok) break;
+      }
+      return { kind: 'act', outcomes, url: location.href };
     }
 
     if (command.kind === 'pick') {

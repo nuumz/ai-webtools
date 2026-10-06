@@ -190,6 +190,59 @@ export default async function run() {
   t.check('the clicked frame returns its selector', framePicked.selectors?.[0]?.value, 'childField');
   t.check('other frames cancel instead of hanging', topResult.selectors, null);
 
+  // --- Action scripts: driving the page rather than filling it -------------
+  const act = (steps) =>
+    page.evaluate((payload) => window.__DEV_TOOL_FORM_AGENT__({ kind: 'act', steps: payload }), steps);
+
+  const pressed = await act([
+    { id: 'a1', label: 'Send', kind: 'click', selectors: [{ strategy: 'id', value: 'kitButton' }] },
+  ]);
+  t.check('a click step reports ok', pressed.outcomes, [{ id: 'a1', ok: true }]);
+  // The kit button listens on `pointerup` as well as `click`, which is the
+  // whole point: a control that reacts to the pointer must hear the gesture,
+  // and each event exactly once — a repeat here submits a form twice.
+  t.check(
+    'and the button hears the gesture once, pointer event included',
+    await page.evaluate(() => window.__kitPresses),
+    ['pointerup', 'click'],
+  );
+
+  const sequenced = await act([
+    { id: 'b1', label: 'Nowhere', kind: 'click', selectors: [{ strategy: 'id', value: 'no-such-button' }], timeoutMs: 200 },
+    { id: 'b2', label: 'Send', kind: 'click', selectors: [{ strategy: 'id', value: 'kitButton' }] },
+  ]);
+  t.check('a failed step stops the script', sequenced.outcomes, [{ id: 'b1', ok: false, why: 'missing' }]);
+  t.check(
+    'so the step after it never runs',
+    await page.evaluate(() => window.__kitPresses),
+    ['pointerup', 'click'],
+  );
+
+  // Naming a button by the words on it is the only durable way to point a
+  // script at a component kit's buttons — they carry no test id and their
+  // generated class names change with every build.
+  await page.evaluate(() => (window.__kitPresses.length = 0));
+  const byText = await act([
+    { id: 'd1', label: 'Send', kind: 'click', selectors: [{ strategy: 'text', value: 'Send' }] },
+  ]);
+  t.check('a button can be clicked by its own text', byText.outcomes, [{ id: 'd1', ok: true }]);
+  t.check(
+    'and the click lands on the button, not the box around it',
+    await page.evaluate(() => window.__kitPresses),
+    ['pointerup', 'click'],
+  );
+
+  const checked = await act([
+    { id: 'c1', label: 'Wait for the button', kind: 'waitFor', selectors: [{ strategy: 'id', value: 'kitButton' }] },
+    { id: 'c2', label: 'Expect the heading', kind: 'assertText', text: 'Send', timeoutMs: 500 },
+    { id: 'c3', label: 'Expect nonsense', kind: 'assertText', text: 'not on this page at all', timeoutMs: 300 },
+  ]);
+  t.check('waitFor and assertText pass, then the missing text stops it', checked.outcomes, [
+    { id: 'c1', ok: true },
+    { id: 'c2', ok: true },
+    { id: 'c3', ok: false, why: 'text' },
+  ]);
+
   await browser.close();
   server.close();
   return t.failures;

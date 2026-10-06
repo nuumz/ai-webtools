@@ -417,6 +417,107 @@ export default async function run() {
     await framed.close();
   }
 
+  /*
+   * A frame the app replaces keeps its address but not its id, and the panel
+   * had no way back from that: every command failed with "the frame is gone"
+   * until the user picked again. The worker now hands the role to the frame
+   * that took its place, and this drives the real port the panel speaks on.
+   */
+  {
+    const framed = await context.newPage();
+    await framed.goto(`${server.base}/demo/framed`);
+    await framed.waitForTimeout(500);
+    const framedTabId = await worker.evaluate(
+      async ([base]) => (await chrome.tabs.query({ url: `${base}/demo/framed*` }))[0]?.id,
+      [server.base],
+    );
+
+    // A second panel port for this tab: the same contract the side panel uses.
+    const chosen = await panel.evaluate(async ([tabId]) => {
+      const port = chrome.runtime.connect({ name: 'devtool.panel' });
+      window.__frameLists = [];
+      port.onMessage.addListener((message) => {
+        if (message.kind === 'frame/list') window.__frameLists.push(message);
+      });
+      window.__panelPort = port;
+      port.postMessage({ kind: 'log/subscribe', tabId });
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const latest = window.__frameLists.at(-1);
+      const app = latest?.frames.find((frame) => frame.url.includes('/demo/framed-app'));
+      port.postMessage({ kind: 'frame/select', frameId: app?.frameId });
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      return { chosen: app?.frameId, reported: window.__frameLists.at(-1)?.workingFrameId };
+    }, [framedTabId]);
+
+    t.assert('the panel can choose the app frame', chosen.chosen !== undefined, JSON.stringify(chosen));
+    t.check('and the worker reports it back', chosen.reported, chosen.chosen);
+
+    // Replace the iframe with an identical one: same address, new frame id.
+    await framed.evaluate(() => {
+      const old = document.querySelector('iframe');
+      const replacement = document.createElement('iframe');
+      replacement.src = old.src;
+      old.remove();
+      document.body.appendChild(replacement);
+    });
+    await framed.waitForTimeout(1200);
+
+    const after = await panel.evaluate(async () => {
+      const latest = window.__frameLists.at(-1);
+      return {
+        workingFrameId: latest?.workingFrameId,
+        frameIds: latest?.frames.map((frame) => frame.frameId),
+        appFrameId: latest?.frames.find((frame) => frame.url.includes('/demo/framed-app'))?.frameId,
+      };
+    });
+
+    t.check('a replaced frame hands the role to its successor', after.workingFrameId, after.appFrameId);
+    t.assert(
+      'and the successor is a frame that really exists',
+      after.frameIds?.includes(after.workingFrameId),
+      JSON.stringify(after),
+    );
+    t.assert(
+      'which is not the id the panel originally chose',
+      after.workingFrameId !== chosen.chosen,
+      JSON.stringify({ before: chosen.chosen, after }),
+    );
+
+    await panel.evaluate(() => window.__panelPort?.disconnect());
+    await framed.close();
+  }
+
+  // The page's own world: everything the panel's Control tab does — calling the
+  // app's functions, evaluating an expression, replaying a request through the
+  // page's fetch — depends on `world: 'MAIN'` seeing page globals that the form
+  // agent's own world cannot. Only a real extension proves that boundary.
+  await page.bringToFront();
+  await page.evaluate(() => {
+    window.__appProbe = { state: { ready: true }, echo: (text) => `got:${text}` };
+  });
+
+  const worlds = await worker.evaluate(async ([id]) => {
+    const read = async (world) => {
+      const [entry] = await chrome.scripting.executeScript({
+        target: { tabId: id },
+        world,
+        func: () => (window.__appProbe ? window.__appProbe.echo('x') : 'invisible'),
+      });
+      return entry?.result;
+    };
+    const [evaluated] = await chrome.scripting.executeScript({
+      target: { tabId: id },
+      world: 'MAIN',
+      func: (source) => new Function(`return (${source});`)(),
+      args: ['window.__appProbe.state.ready'],
+    });
+    return { main: await read('MAIN'), isolated: await read('ISOLATED'), evaluated: evaluated?.result };
+  }, [pageTabId]);
+
+  t.check('the page world reaches the app\'s own functions', worlds.main, 'got:x');
+  t.check('the isolated world cannot see them at all', worlds.isolated, 'invisible');
+  t.check('an expression evaluates with the page\'s globals', worlds.evaluated, true);
+
   await context.close();
   server.close();
   rmSync(profile, { recursive: true, force: true });

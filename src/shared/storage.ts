@@ -9,6 +9,7 @@ import {
 import { clampBodyLimit } from './capture';
 import type { StoryEntry, StoryMeta } from './story';
 import { migrateFormFillFields, type FormCase, type FormProfile } from './form';
+import type { ActionScript } from './actions';
 
 const hasChromeStorage = (): boolean =>
   typeof chrome !== 'undefined' && !!chrome.storage?.local;
@@ -121,6 +122,35 @@ export async function loadCases(): Promise<FormCase[]> {
 export async function saveCases(cases: FormCase[]): Promise<void> {
   if (!hasChromeStorage()) return;
   await chrome.storage.local.set({ [STORAGE_KEYS.cases]: cases });
+}
+
+export async function loadActions(): Promise<ActionScript[]> {
+  if (!hasChromeStorage()) return [];
+  const stored = await chrome.storage.local.get([STORAGE_KEYS.actions]);
+  const scripts = stored[STORAGE_KEYS.actions];
+  return Array.isArray(scripts) ? (scripts as ActionScript[]) : [];
+}
+
+export async function saveActions(scripts: ActionScript[]): Promise<void> {
+  if (!hasChromeStorage()) return;
+  await chrome.storage.local.set({ [STORAGE_KEYS.actions]: scripts });
+}
+
+/** What the App tab last worked with, so the panel does not ask for it again every time. */
+export interface AppActionState {
+  cisId: string;
+}
+
+export async function loadAppState(): Promise<AppActionState> {
+  if (!hasChromeStorage()) return { cisId: '' };
+  const stored = await chrome.storage.local.get([STORAGE_KEYS.appState]);
+  const state = stored[STORAGE_KEYS.appState];
+  return state && typeof state === 'object' ? { cisId: String((state as AppActionState).cisId ?? '') } : { cisId: '' };
+}
+
+export async function saveAppState(state: AppActionState): Promise<void> {
+  if (!hasChromeStorage()) return;
+  await chrome.storage.local.set({ [STORAGE_KEYS.appState]: state });
 }
 
 export async function loadCounters(): Promise<Record<string, number>> {
