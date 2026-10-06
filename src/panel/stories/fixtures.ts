@@ -8,7 +8,13 @@
  */
 import type { CapturedExchange, ExchangeMeta } from '../../shared/capture';
 import { toExchangeMeta } from '../../shared/capture';
-import { newField, newProfile, type FormCase, type FormProfile } from '../../shared/form';
+import {
+  newField,
+  newProfile,
+  type FormCase,
+  type FormProfile,
+  type RecordedFieldInput,
+} from '../../shared/form';
 import type { ScreenOutcome } from '../../inject/run';
 import { newStory, type StoryMeta } from '../../shared/story';
 import type { NetworkLogState } from '../hooks/useNetworkLog';
@@ -280,12 +286,39 @@ export const bodies = {
   },
 };
 
-export const recordedFields = [
-  { selectors: [{ strategy: 'testid' as const, value: 'email' }], value: 'tester@dev.local', label: 'Email' },
-  { selectors: [{ strategy: 'id' as const, value: 'password' }], value: 'hunter2!', label: 'Password' },
-  { selectors: [{ strategy: 'name' as const, value: 'cardNo' }], value: '4111 1111 1111 1111', label: 'Card number' },
-  { selectors: [{ strategy: 'label' as const, value: 'Country' }], value: 'Thailand', label: 'Country' },
-  { selectors: [{ strategy: 'css' as const, value: 'form > div:nth-child(5) input' }], value: '3', label: 'Quantity' },
+export const recordedFields: RecordedFieldInput[] = [
+  { selectors: [{ strategy: 'testid', value: 'email' }], value: 'tester@dev.local', label: 'Email', origin: 'control', form: 'checkout' },
+  { selectors: [{ strategy: 'id', value: 'password' }], value: 'hunter2!', label: 'Password', origin: 'control', form: 'checkout' },
+  { selectors: [{ strategy: 'name', value: 'cardNo' }], value: '4111 1111 1111 1111', label: 'Card number', origin: 'control', form: 'checkout' },
+  { selectors: [{ strategy: 'label', value: 'Country' }], value: 'Thailand', label: 'Country', origin: 'control', form: 'checkout' },
+  { selectors: [{ strategy: 'css', value: 'form > div:nth-child(5) input' }], value: '3', label: 'Quantity', origin: 'control', form: 'checkout' },
+];
+
+/**
+ * What "Read the page" brings back from the bank's tablet wizard: two real
+ * inputs, and sixteen things the caption sweep read off the screen — step
+ * names, a sign-out link, summary rows. This is the recording the selection
+ * controls exist for, and it cannot be produced by hand in Storybook.
+ */
+export const recordedNoisyPage: RecordedFieldInput[] = [
+  { selectors: [{ strategy: 'testid', value: 'input-username' }], value: 'Test_SF034', label: 'Username', origin: 'control', form: 'Supervisor Override' },
+  { selectors: [{ strategy: 'testid', value: 'input-password' }], value: 'TestSF@2025', label: 'Password', origin: 'control', form: 'Supervisor Override' },
+  { selectors: [{ strategy: 'label', value: 'กสิกร349793 รักไทย349793' }], value: 'ออก', label: 'กสิกร349793 รักไทย349793', origin: 'text' },
+  { selectors: [{ strategy: 'label', value: 'Authentication' }], value: 'Service Selection', label: 'Authentication', origin: 'text', section: 'ขั้นตอน' },
+  { selectors: [{ strategy: 'label', value: 'Customer Info' }], value: 'Service Detail', label: 'Customer Info', origin: 'text', section: 'ขั้นตอน' },
+  { selectors: [{ strategy: 'label', value: 'Review & Confirmation' }], value: 'e-Signature', label: 'Review & Confirmation', origin: 'text', section: 'ขั้นตอน' },
+  { selectors: [{ strategy: 'label', value: 'สำหรับเจ้าหน้าที่ธนาคาร' }], value: 'Supervisor Override การยืนยันตัวลูกค้า', label: 'สำหรับเจ้าหน้าที่ธนาคาร', origin: 'text' },
+  { selectors: [{ strategy: 'label', value: 'ชื่อลูกค้า' }], value: 'ต.ญ. กุลชรี ทักษิณ', label: 'ชื่อลูกค้า', origin: 'text', section: 'รายละเอียดลูกค้า' },
+  { selectors: [{ strategy: 'label', value: 'เหตุผลในการ Override' }], value: 'บัตรประชาชนไม่มี Chip/เอกสารแสดงตนอื่นๆ', label: 'เหตุผลในการ Override', origin: 'text', section: 'รายละเอียดลูกค้า' },
+  { selectors: [{ strategy: 'label', value: 'ประเภทเอกสารสำคัญ' }], value: 'บัตรประชาชน', label: 'ประเภทเอกสารสำคัญ', origin: 'text', section: 'รายละเอียดลูกค้า' },
+  { selectors: [{ strategy: 'label', value: 'เลขที่เอกสารสำคัญ' }], value: '3100807249258', label: 'เลขที่เอกสารสำคัญ', origin: 'text', section: 'รายละเอียดลูกค้า' },
+  { selectors: [{ strategy: 'label', value: 'วันเดือนปีเกิด' }], value: '16/04/2527', label: 'วันเดือนปีเกิด', origin: 'text', section: 'รายละเอียดลูกค้า' },
+  { selectors: [{ strategy: 'label', value: 'สัญชาติ' }], value: 'ไทย', label: 'สัญชาติ', origin: 'text', section: 'รายละเอียดลูกค้า' },
+  { selectors: [{ strategy: 'label', value: 'วันที่ออกเอกสาร' }], value: '13/01/2558', label: 'วันที่ออกเอกสาร', origin: 'text', section: 'รายละเอียดลูกค้า' },
+  { selectors: [{ strategy: 'label', value: 'วันที่หมดอายุ' }], value: '31/12/2569', label: 'วันที่หมดอายุ', origin: 'text', section: 'รายละเอียดลูกค้า' },
+  { selectors: [{ strategy: 'label', value: 'ออกโดย' }], value: 'ท้องถิ่นเขตราษฎร์บูรณะ', label: 'ออกโดย', origin: 'text', section: 'รายละเอียดลูกค้า' },
+  { selectors: [{ strategy: 'css', value: '.footer button:nth-child(1)' }], value: 'ย้อนกลับ', label: 'ย้อนกลับ', origin: 'text' },
+  { selectors: [{ strategy: 'css', value: '.footer button:nth-child(2)' }], value: '', label: 'ถัดไป', origin: 'text' },
 ];
 
 export const tabUrl = `${ORIGIN}/checkout`;

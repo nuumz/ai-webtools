@@ -106,6 +106,11 @@ export default async function run() {
     recorded.fields.some((entry) => entry.selectors[0]?.strategy === 'testid'),
     JSON.stringify(recorded.fields[0]?.selectors),
   );
+  // The panel groups a recording by form and lets the read-off-the-page half be
+  // dropped, so both marks have to survive the trip out of the agent.
+  const email = recorded.fields.find((entry) => entry.selectors[0]?.value === 'email');
+  t.check('a real control is marked as one', email?.origin, 'control');
+  t.check('and carries the form it sits in', email?.form, 'signup');
 
   const withSecrets = await page.evaluate(() =>
     window.__DEV_TOOL_FORM_AGENT__({ kind: 'record', includeSecrets: true }),
@@ -154,6 +159,25 @@ export default async function run() {
   await waitForPicker(page);
   await page.keyboard.press('Escape');
   t.check('Escape cancels the picker', (await cancelled).selectors, null);
+
+  /*
+   * The picker must not set off what it points at: the gesture that picks is
+   * the same gesture that presses, and a kit commits on `pointerup` long before
+   * a click exists. Pointing at a plain field is harmless, which is why only a
+   * control that acts on the pointer can catch this.
+   */
+  const pickButton = page.evaluate(() =>
+    window.__DEV_TOOL_FORM_AGENT__({ kind: 'pick', sessionId: 's2b' }),
+  );
+  await waitForPicker(page);
+  await page.click('#kitButton');
+  const pickedButton = await pickButton;
+  t.check('picking a kit button returns its selector', pickedButton.selectors?.[0]?.value, 'kitButton');
+  t.check(
+    'and does not press it on the way',
+    await page.evaluate(() => window.__kitPresses),
+    [],
+  );
 
   // Every frame runs a picker, but only one gets clicked: the rest must cancel
   // themselves, or executeScript would never settle.

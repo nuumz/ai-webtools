@@ -43,6 +43,7 @@ import {
 import { resolveProfile } from '../shared/resolveProfile';
 import {
   activeTab,
+  FrameGoneError,
   runFill,
   runPick,
   explainEmpty,
@@ -350,6 +351,19 @@ export default function SidePanel() {
     await chrome.tabs.reload(browserTab.id);
   };
 
+  /*
+   * Fill, Read and the screen check all act in the working frame, so all three
+   * break the same way when that frame is gone — and a stale id keeps breaking
+   * them until it is dropped. Forgetting it and re-reading the list is what
+   * makes the next attempt possible; the toast says so, because the frame the
+   * user chose is not the frame they get afterwards.
+   */
+  const forgetWorkingFrame = () => {
+    log.selectFrame(undefined);
+    log.refreshFrames();
+    showToast('The frame the panel was working in is gone — pick the frame again.', 6000);
+  };
+
   const fillForm = async () => {
     if (!cased) return;
     try {
@@ -373,6 +387,10 @@ export default function SidePanel() {
         outcome.misses.length + outcome.skipped.length + outcome.rejected.length;
       showToast(<FillSummary outcome={outcome} />, unfilled > 0 ? 6000 : 2500);
     } catch (err) {
+      if (err instanceof FrameGoneError) {
+        forgetWorkingFrame();
+        return;
+      }
       console.error('[Panel] Fill failed:', err);
       showToast('Fill failed — see console');
     }
@@ -485,6 +503,10 @@ export default function SidePanel() {
       }
       setRecorded(found.fields);
     } catch (err) {
+      if (err instanceof FrameGoneError) {
+        forgetWorkingFrame();
+        return;
+      }
       console.error('[Panel] Record failed:', err);
       showToast('Record failed — see console');
     }
@@ -586,8 +608,14 @@ export default function SidePanel() {
       if (browserTab?.id === undefined) return;
       setScreen(await runScreen(browserTab.id, signatures, log.workingFrameId));
     } catch (err) {
-      console.error('[Panel] Screen check failed:', err);
       setScreen(undefined);
+      // The screen check runs by itself whenever the Fill tab comes forward, so
+      // it is the one that notices first — and it must not shout about it.
+      if (err instanceof FrameGoneError) {
+        forgetWorkingFrame();
+        return;
+      }
+      console.error('[Panel] Screen check failed:', err);
     } finally {
       setScreenBusy(false);
     }

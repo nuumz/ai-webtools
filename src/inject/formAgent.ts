@@ -14,6 +14,17 @@ export interface RecordedField {
   label?: string;
   /** Set only when the label is repeated, so the field can be told from its twin. */
   anchor?: { text: string };
+  /*
+   * A recording mixes two unlike things: the page's own controls, and widgets
+   * that exist only as text — the kit's dropdowns, but also every caption the
+   * caption sweep mistakes for one. The panel is the only place that can tell
+   * the user which is which, so where a field came from travels with it.
+   */
+  origin: 'control' | 'text';
+  /** The <form> the field sits in, when it sits in one. Grouping only. */
+  form?: string;
+  /** The heading of the block it sits in. Grouping only — see `anchor`. */
+  section?: string;
 }
 
 export type AgentCommand =
@@ -908,6 +919,28 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
           if (event.target instanceof Element) take(event.target);
         };
 
+        /**
+         * The tail of the gesture that picked, so the page cannot act on it.
+         *
+         * `click` is not the tail: a UI kit commits on `pointerup` or `touchend`
+         * long before any click is dispatched, so pointing at a button pressed
+         * it — the picker looked broken and the form went off. `touchstart` and
+         * `touchmove` stay out deliberately: swallowing those would stop the
+         * page scrolling while the picker is armed, and the user has to be able
+         * to reach the button before pointing at it.
+         */
+        const gestureTail = [
+          'pointerup',
+          'pointercancel',
+          'mouseup',
+          'click',
+          'dblclick',
+          'auxclick',
+          'contextmenu',
+          'touchend',
+          'touchcancel',
+        ];
+
         /** Keeps the app from acting on the gesture we already consumed. */
         const swallow = (event: Event): void => {
           event.preventDefault();
@@ -973,11 +1006,10 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
           window.removeEventListener('mousedown', onDown, true);
           window.removeEventListener('focusin', onFocus, true);
           window.removeEventListener('keydown', onKey, true);
-          // The gesture that picked still has a mouseup and a click to come:
-          // let those be swallowed, then stop listening.
+          // The gesture that picked still has its tail to come: let that be
+          // swallowed, then stop listening.
           setTimeout(() => {
-            window.removeEventListener('mouseup', swallow, true);
-            window.removeEventListener('click', swallow, true);
+            for (const type of gestureTail) window.removeEventListener(type, swallow, true);
           }, 0);
           window.removeEventListener('message', onMessage);
           resolve(result);
@@ -1007,8 +1039,7 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
         window.addEventListener('mousemove', onMove, true);
         window.addEventListener('pointerdown', onDown, true);
         window.addEventListener('mousedown', onDown, true);
-        window.addEventListener('mouseup', swallow, true);
-        window.addEventListener('click', swallow, true);
+        for (const type of gestureTail) window.addEventListener(type, swallow, true);
         // Last resort: an app that consumes the gesture in its own capture
         // listener still moves focus into the field, and a field is what the
         // picker is for. Held back at the start so a page that focuses itself
@@ -1039,6 +1070,23 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
       return { kind: 'screen', scores, sample: headingCandidates() };
     }
 
+    /**
+     * The form a field belongs to, named the way the page names it.
+     *
+     * Grouping only, and deliberately shallow: `closest` does not cross a shadow
+     * boundary, so a control in a shadow root whose <form> is outside it reports
+     * none — which is the honest answer for grouping, and a page that uses no
+     * <form> at all groups by section instead.
+     */
+    function formFor(element: Element): string | undefined {
+      const form = element.closest('form');
+      if (!form) return undefined;
+      const named = form.getAttribute('name') ?? form.getAttribute('id') ?? form.getAttribute('aria-label');
+      if (named?.trim()) return named.trim();
+      const index = deepQuery('form').indexOf(form);
+      return index >= 0 ? `Form ${index + 1}` : 'Form';
+    }
+
     /** The heading of the block a control sits in, e.g. "ชื่อ-นามสกุล (ไทย)". */
     function sectionFor(element: Element): string | undefined {
       let current: Element | null = element.parentElement;
@@ -1063,7 +1111,7 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
      * `skipped` and `rejected`; leaving those fields out here instead would empty
      * a recording of every date and dropdown that renders behind a picker.
      */
-    const candidatesToRecord: Element[] = [];
+    const candidatesToRecord: { element: Element; origin: RecordedField['origin'] }[] = [];
     const seenWidgets = new Set<Element>();
     for (const element of deepQuery('input, select, textarea, [contenteditable=""], [contenteditable="true"]')) {
       if (!isVisible(element) || (element as HTMLInputElement).disabled) continue;
@@ -1075,11 +1123,11 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
       if (group && segmentsOf(group).includes(element as HTMLInputElement)) {
         if (!seenWidgets.has(group)) {
           seenWidgets.add(group);
-          candidatesToRecord.push(group);
+          candidatesToRecord.push({ element: group, origin: 'control' });
         }
         continue;
       }
-      candidatesToRecord.push(element);
+      candidatesToRecord.push({ element, origin: 'control' });
     }
 
     // Widgets with no form control behind them — the kit's own dropdowns — are
@@ -1096,28 +1144,35 @@ export async function formAgent(command: AgentCommand): Promise<AgentResult> {
         const inside = [...seenWidgets].some((known) => known.contains(caption));
         if (widget && !holdsControl(widget) && !inside && !seenWidgets.has(widget) && /[\p{L}\p{N}]/u.test(says)) {
           seenWidgets.add(widget);
-          candidatesToRecord.push(widget);
+          candidatesToRecord.push({ element: widget, origin: 'text' });
         }
         break;
       }
     }
 
     const labelCounts = new Map<string, number>();
-    for (const element of candidatesToRecord) {
+    for (const { element } of candidatesToRecord) {
       const label = normalise(labelFor(element) ?? '');
       if (label) labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
     }
 
     const recorded: RecordedField[] = [];
-    for (const element of candidatesToRecord) {
+    for (const { element, origin } of candidatesToRecord) {
       const label = labelFor(element);
       const repeated = label !== undefined && (labelCounts.get(normalise(label)) ?? 0) > 1;
-      const section = repeated ? sectionFor(element) : undefined;
+      const section = sectionFor(element);
+      const form = formFor(element);
       recorded.push({
         selectors: buildSelectors(element),
         value: readValue(element),
         label,
-        ...(section ? { anchor: { text: section } } : {}),
+        origin,
+        ...(form ? { form } : {}),
+        ...(section ? { section } : {}),
+        // The anchor narrows a selector at fill time, so it is still set only
+        // for a repeated label: scoping every field to its block would make a
+        // profile break the moment the page re-words a heading.
+        ...(repeated && section ? { anchor: { text: section } } : {}),
       });
     }
     return { kind: 'record', fields: recorded, url: location.href };

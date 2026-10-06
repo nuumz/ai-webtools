@@ -47,6 +47,9 @@
   <input id="newsletter" name="newsletter" type="checkbox">
 </form>
 
+<!-- A kit button: it commits on the pointer, the way a tablet UI does. -->
+<button id="kitButton" type="button">Send</button>
+
 <fancy-input></fancy-input>
 <iframe src="/demo/frame.html" title="child form"></iframe>
 
@@ -74,6 +77,16 @@
       }
     },
   );
+
+  /*
+   * What the kit button acted on. Two witnesses, because a UI kit commits on
+   * `pointerup` long before any click is dispatched — the picker has to swallow
+   * that too, or pointing at a control presses it.
+   */
+  window.__kitPresses = [];
+  const kit = document.getElementById('kitButton');
+  kit.addEventListener('pointerup', () => window.__kitPresses.push('pointerup'));
+  kit.addEventListener('click', () => window.__kitPresses.push('click'));
 
   // Records what the page actually observed, the way a framework would.
   window.__events = [];

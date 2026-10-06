@@ -16,6 +16,28 @@ import {
   type SkippedField,
 } from './formAgent';
 
+/**
+ * The frame the panel was told to act in no longer exists.
+ *
+ * A frame id outlives its frame: an SPA that swaps its iframe, a frame Chrome
+ * parked in the back/forward cache, a crashed renderer. Chrome then rejects the
+ * injection with a raw "No frame with id 920 in tab with id 859260512", and
+ * fill, read and the screen check all failed with that same line — three
+ * console errors that name nothing the user can act on. Falling back to every
+ * frame is not the answer: writing into whichever frame answers first is the
+ * exact thing naming a frame exists to prevent.
+ */
+export class FrameGoneError extends Error {
+  constructor(readonly frameId: number) {
+    super(`No frame with id ${frameId}`);
+    this.name = 'FrameGoneError';
+  }
+}
+
+/** Chrome words this two ways depending on which API noticed. */
+const isFrameGone = (error: unknown): boolean =>
+  error instanceof Error && /no frame with id|frame with id .* was removed/i.test(error.message);
+
 /** A frame where the agent threw, kept so a silent result can be explained. */
 export interface FrameFailure {
   message: string;
@@ -236,14 +258,20 @@ async function execute(
   command: Parameters<typeof formAgent>[0],
   frameId?: number,
 ): Promise<FrameAnswer[]> {
-  const injected = await chrome.scripting.executeScript({
-    // Naming the frame is what stops a fill meant for the app from also being
-    // written into the simulator wrapping it. `allFrames` and `frameIds` are
-    // mutually exclusive, hence the branch rather than an extra option.
-    target: frameId === undefined ? { tabId, allFrames: true } : { tabId, frameIds: [frameId] },
-    func: formAgent,
-    args: [command],
-  });
+  let injected;
+  try {
+    injected = await chrome.scripting.executeScript({
+      // Naming the frame is what stops a fill meant for the app from also being
+      // written into the simulator wrapping it. `allFrames` and `frameIds` are
+      // mutually exclusive, hence the branch rather than an extra option.
+      target: frameId === undefined ? { tabId, allFrames: true } : { tabId, frameIds: [frameId] },
+      func: formAgent,
+      args: [command],
+    });
+  } catch (error) {
+    if (frameId !== undefined && isFrameGone(error)) throw new FrameGoneError(frameId);
+    throw error;
+  }
   // Frames that cannot be injected (about:blank, sandboxed) simply return
   // nothing, which arrives as null; normalise so one absent shape reaches the
   // callers rather than two.

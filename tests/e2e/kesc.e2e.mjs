@@ -76,6 +76,8 @@ export default async function run() {
   const byLabel = new Map(captured.fields.map((entry) => [entry.label, entry]));
 
   t.check('the dropdown is saved by its caption', byLabel.get('ประเภทเอกสารสำคัญ')?.selectors[0]?.value, 'ประเภทเอกสารสำคัญ');
+  // A widget with no control behind it is what the panel's "Text" filter hides.
+  t.check('and is marked as read off the page', byLabel.get('ประเภทเอกสารสำคัญ')?.origin, 'text');
   t.check('with the value it shows, and none of its furniture', byLabel.get('ประเภทเอกสารสำคัญ')?.value, 'บัตรประชาชน');
   t.check('the date is one field, not three', byLabel.get('วันเดือนปีเกิด')?.value, '31/12/2530');
   t.check('a segment is not saved on its own', captured.fields.some((entry) => entry.label === 'DD'), false);

@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { fn } from 'storybook/test';
-import { recordedFields } from '../stories/fixtures';
+import { recordedFields, recordedNoisyPage } from '../stories/fixtures';
 import RecordedFieldsDialog from './RecordedFieldsDialog';
 
 const meta = {
@@ -27,3 +27,10 @@ export const Recorded: Story = {};
 export const WithSecrets: Story = { args: { includeSecrets: true } };
 
 export const NothingFound: Story = { args: { fields: [] } };
+
+/**
+ * "Read the page" on the bank's tablet wizard: two real inputs buried under
+ * sixteen rows the caption sweep read off the screen. The origin filter, the
+ * form/block picker and All/None/Invert exist for exactly this list.
+ */
+export const NoisyPage: Story = { args: { fields: recordedNoisyPage } };

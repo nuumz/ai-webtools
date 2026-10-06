@@ -248,6 +248,15 @@ export interface RecordedFieldInput {
   value: string;
   label?: string;
   anchor?: FieldAnchor;
+  /*
+   * Where the recording found it, and what it sat in. Only the dialog that
+   * picks fields reads these — they are how a page's real controls are told
+   * from what the caption sweep read off the page, so they are deliberately
+   * NOT carried into `ProfileField`: a profile fills what it is pointed at.
+   */
+  origin?: 'control' | 'text';
+  form?: string;
+  section?: string;
 }
 
 /** uniqueKey can only build an identifier out of Latin letters and digits. */

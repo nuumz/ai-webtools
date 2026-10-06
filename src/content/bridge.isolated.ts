@@ -471,4 +471,28 @@ for (const name of ['pushState', 'replaceState'] as const) {
 window.addEventListener('popstate', reportRoute);
 window.addEventListener('hashchange', reportRoute);
 
+/*
+ * 5. …and a frame Chrome parks in the back/forward cache is not a frame.
+ *
+ * A cached page keeps its port in the worker's frame list while nothing can be
+ * delivered through it — Chrome logs "the page keeping the extension port is
+ * moved into back/forward cache" and the panel goes on offering a frame that
+ * no longer accepts an injection. Closing the port on the way in and opening a
+ * fresh one on the way back keeps the list to frames that are really there.
+ */
+window.addEventListener('pagehide', (event) => {
+  if (!event.persisted) return;
+  const open = port;
+  port = undefined;
+  try {
+    open?.disconnect();
+  } catch {
+    // Already closed by the platform: nothing left to close.
+  }
+});
+
+window.addEventListener('pageshow', (event) => {
+  if (event.persisted) openPort();
+});
+
 }
